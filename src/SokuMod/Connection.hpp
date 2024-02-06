@@ -34,6 +34,10 @@ private:
 	std::mutex _infoMutex;
 	std::thread _netThread;
 	std::thread _posThread;
+	std::thread _connectThread;
+	std::string _host;
+	unsigned short _port;
+	bool _hasConnected = false;
 	bool _connected = true;
 	bool _init = false;
 	char _uniqueId[16];
@@ -96,6 +100,7 @@ public:
 	bool isConnected() const;
 	const LobbyInfo getLobbyInfo() const;
 	bool sendGameInfo();
+	bool hasConnected() const;
 	Player *getMe();
 	const Player *getMe() const;
 	std::vector<Player> getPlayers() const;
