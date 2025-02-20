@@ -183,8 +183,18 @@ static LRESULT __stdcall Hooked_WndProc(const HWND hWnd, UINT uMsg, WPARAM wPara
 
 		if (activeMenu->keyBufferUsed > 0)
 			activeMenu->onKeyPressed(UTF16Decode(std::wstring(activeMenu->keyBuffer, activeMenu->keyBuffer + activeMenu->keyBufferUsed))[0]);
-	} else if (uMsg == WM_KEYUP)
+		if (wParam < sizeof(activeMenu->key_timers) / sizeof(*activeMenu->key_timers)) {
+			std::lock_guard<std::mutex> lock_(activeMenu->key_timers_mutex);
+			if (activeMenu->key_timers[wParam] == 0)
+				activeMenu->key_timers[wParam] = -1;
+		}
+	} else if (uMsg == WM_KEYUP) {
 		activeMenu->onKeyReleased();
+		if (wParam < sizeof(activeMenu->key_timers) / sizeof(*activeMenu->key_timers)) {
+			std::lock_guard<std::mutex> lock_(activeMenu->key_timers_mutex);
+			activeMenu->key_timers[wParam] = 0;
+		}
+	}
 	ptrMutex.unlock();
 	return CallWindowProc(Original_WndProc, hWnd, uMsg, wParam, lParam);
 }
@@ -1716,23 +1726,21 @@ void InLobbyMenu::_inputBoxUpdate()
 {
 	if (GetForegroundWindow() != SokuLib::window)
 		return;
+	std::lock_guard<std::mutex> lock_(this->key_timers_mutex);
 	for (size_t i = 0; i < 256; i++) {
-		int j = GetAsyncKeyState(i);
-		BYTE current = j >> 8 | j & 1;
-
-		if (current & 0x80)
-			this->_timers[i]++;
-		else
-			this->_timers[i] = 0;
+		if (this->key_timers[i] < 0)
+			this->key_timers[i] = 1;
+		else if (this->key_timers[i] != 0)
+			this->key_timers[i]++;
 	}
-	if (this->_timers[chatKey] == 1)
+	if (this->key_timers[chatKey] == 1)
 		this->_returnPressed = true;
-	if (this->_timers[VK_PRIOR] == 1 || (this->_timers[VK_PRIOR] > 36 && this->_timers[VK_PRIOR] % 6 == 0)) {
+	if (this->key_timers[VK_PRIOR] == 1 || (this->key_timers[VK_PRIOR] > 36 && this->key_timers[VK_PRIOR] % 6 == 0)) {
 		playSound(0x27);
 		this->_chatOffset += SCROLL_AMOUNT;
 		this->_chatTimer = max(this->_chatTimer, 180);
 	}
-	if (this->_timers[VK_NEXT] == 1 || (this->_timers[VK_NEXT] > 36 && this->_timers[VK_NEXT] % 6 == 0)) {
+	if (this->key_timers[VK_NEXT] == 1 || (this->key_timers[VK_NEXT] > 36 && this->key_timers[VK_NEXT] % 6 == 0)) {
 		if (this->_chatOffset < SCROLL_AMOUNT)
 			this->_chatOffset = 0;
 		else
@@ -1741,20 +1749,20 @@ void InLobbyMenu::_inputBoxUpdate()
 		playSound(0x27);
 	}
 	if (!this->_editingText) {
-		if (this->_returnPressed && this->_timers[chatKey] == 0) {
+		if (this->_returnPressed && this->key_timers[chatKey] == 0) {
 			this->_editingText = true;
 			this->_initInputBox();
 			playSound(0x28);
 		}
 		return;
 	}
-	if (this->_timers[VK_UP] == 1 || (this->_timers[VK_UP] > 36 && this->_timers[VK_UP] % 6 == 0)) {
+	if (this->key_timers[VK_UP] == 1 || (this->key_timers[VK_UP] > 36 && this->key_timers[VK_UP] % 6 == 0)) {
 		playSound(0x27);
 		this->_chatOffset += SCROLL_AMOUNT;
 		this->_chatTimer = max(this->_chatTimer, 180);
 		return;
 	}
-	if (this->_timers[VK_DOWN] == 1 || (this->_timers[VK_DOWN] > 36 && this->_timers[VK_DOWN] % 6 == 0)) {
+	if (this->key_timers[VK_DOWN] == 1 || (this->key_timers[VK_DOWN] > 36 && this->key_timers[VK_DOWN] % 6 == 0)) {
 		if (this->_chatOffset < SCROLL_AMOUNT)
 			this->_chatOffset = 0;
 		else
@@ -1764,7 +1772,7 @@ void InLobbyMenu::_inputBoxUpdate()
 		return;
 	}
 	if (this->_returnPressed) {
-		if (this->_timers[chatKey] == 0) {
+		if (this->key_timers[chatKey] == 0) {
 			if (this->immComposition.empty()) {
 				if (this->_buffer.size() != 1) {
 					this->_sendMessage(std::wstring{this->_buffer.begin(), this->_buffer.end() - 1});
@@ -1780,15 +1788,15 @@ void InLobbyMenu::_inputBoxUpdate()
 	}
 	this->_textMutex.lock();
 	if (this->immComposition.empty()) {
-		if (this->_timers[VK_HOME] == 1) {
+		if (this->key_timers[VK_HOME] == 1) {
 			playSound(0x27);
 			this->_updateTextCursor(0);
 		}
-		if (this->_timers[VK_END] == 1) {
+		if (this->key_timers[VK_END] == 1) {
 			playSound(0x27);
 			this->_updateTextCursor(this->_buffer.size() - 1);
 		}
-		if (this->_timers[VK_BACK] == 1 || (this->_timers[VK_BACK] > 36 && this->_timers[VK_BACK] % 6 == 0)) {
+		if (this->key_timers[VK_BACK] == 1 || (this->key_timers[VK_BACK] > 36 && this->key_timers[VK_BACK] % 6 == 0)) {
 			if (this->_textCursorPosIndex != 0) {
 				this->_buffer.erase(this->_buffer.begin() + this->_textCursorPosIndex - 1);
 				this->_updateTextCursor(this->_textCursorPosIndex - 1);
@@ -1796,20 +1804,20 @@ void InLobbyMenu::_inputBoxUpdate()
 				playSound(0x27);
 			}
 		}
-		if (this->_timers[VK_DELETE] == 1 || (this->_timers[VK_DELETE] > 36 && this->_timers[VK_DELETE] % 6 == 0)) {
+		if (this->key_timers[VK_DELETE] == 1 || (this->key_timers[VK_DELETE] > 36 && this->key_timers[VK_DELETE] % 6 == 0)) {
 			if (this->_textCursorPosIndex < this->_buffer.size() - 1) {
 				this->_buffer.erase(this->_buffer.begin() + this->_textCursorPosIndex);
 				playSound(0x27);
 				this->textChanged |= 1;
 			}
 		}
-		if (this->_timers[VK_LEFT] == 1 || (this->_timers[VK_LEFT] > 36 && this->_timers[VK_LEFT] % 3 == 0)) {
+		if (this->key_timers[VK_LEFT] == 1 || (this->key_timers[VK_LEFT] > 36 && this->key_timers[VK_LEFT] % 3 == 0)) {
 			if (this->_textCursorPosIndex != 0) {
 				this->_updateTextCursor(this->_textCursorPosIndex - 1);
 				playSound(0x27);
 			}
 		}
-		if (this->_timers[VK_RIGHT] == 1 || (this->_timers[VK_RIGHT] > 36 && this->_timers[VK_RIGHT] % 3 == 0)) {
+		if (this->key_timers[VK_RIGHT] == 1 || (this->key_timers[VK_RIGHT] > 36 && this->key_timers[VK_RIGHT] % 3 == 0)) {
 			if (this->_textCursorPosIndex != this->_buffer.size() - 1) {
 				this->_updateTextCursor(this->_textCursorPosIndex + 1);
 				playSound(0x27);
@@ -1841,7 +1849,7 @@ void InLobbyMenu::_initInputBox()
 	int ret;
 
 	playSound(0x28);
-	memset(this->_timers, 0, sizeof(this->_timers));
+	memset(this->key_timers, 0, sizeof(this->key_timers));
 	this->_lastPressed = 0;
 	this->_textTimer = 0;
 	this->_buffer.clear();
@@ -2318,7 +2326,6 @@ void InLobbyMenu::_updateCompositionSprite()
 void InLobbyMenu::onCompositionResult()
 {
 	this->_returnPressed = false;
-	this->_timers[VK_RETURN] += 2;
 }
 
 int InLobbyMenu::_getTextSize(unsigned int i)

@@ -128,7 +128,6 @@ private:
 	SokuLib::DrawUtils::Sprite _textSprite[2];
 	std::mutex _textMutex;
 	std::thread _hostThread;
-	unsigned _timers[256];
 	unsigned _textTimer = 0;
 	unsigned _lastPressed = 0;
 	unsigned _currentPlatform = 0;
@@ -153,6 +152,8 @@ private:
 
 public:
 	char textChanged = 0;
+	std::mutex key_timers_mutex;
+	int key_timers[256] = {0};
 	HIMC immCtx = nullptr;
 	std::wstring immComposition;
 	bool hasDeadkey = false;
