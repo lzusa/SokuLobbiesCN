@@ -152,8 +152,8 @@ private:
 
 public:
 	char textChanged = 0;
-	std::mutex key_timers_mutex;
-	int key_timers[256] = {0};
+	std::mutex keyTimersMutex;
+	int keyTimers[256] = {0};
 	HIMC immCtx = nullptr;
 	std::wstring immComposition;
 	bool hasDeadkey = false;
