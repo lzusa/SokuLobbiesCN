@@ -134,7 +134,6 @@ private:
 	int _textCursorPosIndex = 0;
 	int _textCursorPosSize = 0;
 	bool _editingText = false;
-	bool _returnPressed = false;
 	std::map<unsigned, int> _textSize;
 
 	void _updateMessageSprite(SokuLib::Vector2i pos, unsigned int remaining, SokuLib::Vector2i realSize, SokuLib::DrawUtils::Sprite &sprite, unsigned char alpha);
@@ -153,7 +152,7 @@ private:
 public:
 	char textChanged = 0;
 	std::mutex keyTimersMutex;
-	int keyTimers[256] = {0};
+	bool keysPressed[256] = {false};
 	HIMC immCtx = nullptr;
 	std::wstring immComposition;
 	bool hasDeadkey = false;
@@ -171,7 +170,6 @@ public:
 	void onKeyPressed(unsigned chr);
 	void onKeyReleased();
 	void addString(wchar_t *str, size_t size);
-	void onCompositionResult();
 
 	void updateChat(bool inGame);
 	void renderChat();

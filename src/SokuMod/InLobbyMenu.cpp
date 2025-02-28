@@ -144,7 +144,6 @@ static LRESULT __stdcall Hooked_WndProc(const HWND hWnd, UINT uMsg, WPARAM wPara
 			ImmGetCompositionStringW(activeMenu->immCtx, GCS_RESULTSTR, immStr, required);
 			activeMenu->addString(immStr, required / 2);
 			free(immStr);
-			activeMenu->onCompositionResult();
 			activeMenu->immComposition.clear();
 			activeMenu->textChanged |= 3;
 		}
@@ -183,18 +182,14 @@ static LRESULT __stdcall Hooked_WndProc(const HWND hWnd, UINT uMsg, WPARAM wPara
 
 		if (activeMenu->keyBufferUsed > 0)
 			activeMenu->onKeyPressed(UTF16Decode(std::wstring(activeMenu->keyBuffer, activeMenu->keyBuffer + activeMenu->keyBufferUsed))[0]);
-		if (wParam < sizeof(activeMenu->keyTimers) / sizeof(*activeMenu->keyTimers)) {
+		if (wParam < sizeof(activeMenu->keysPressed) / sizeof(*activeMenu->keysPressed)) {
 			std::lock_guard<std::mutex> lock_(activeMenu->keyTimersMutex);
-			if (activeMenu->keyTimers[wParam] == 0)
-				activeMenu->keyTimers[wParam] = -1;
+			activeMenu->keysPressed[wParam] = true;
 		}
 	} else if (uMsg == WM_KEYUP) {
 		activeMenu->onKeyReleased();
-		if (wParam < sizeof(activeMenu->keyTimers) / sizeof(*activeMenu->keyTimers)) {
-			std::lock_guard<std::mutex> lock_(activeMenu->keyTimersMutex);
-			activeMenu->keyTimers[wParam] = 0;
-		}
 	}
+
 	ptrMutex.unlock();
 	return CallWindowProc(Original_WndProc, hWnd, uMsg, wParam, lParam);
 }
@@ -1727,20 +1722,12 @@ void InLobbyMenu::_inputBoxUpdate()
 	if (GetForegroundWindow() != SokuLib::window)
 		return;
 	std::lock_guard<std::mutex> lock_(this->keyTimersMutex);
-	for (size_t i = 0; i < 256; i++) {
-		if (this->keyTimers[i] < 0)
-			this->keyTimers[i] = 1;
-		else if (this->keyTimers[i] != 0)
-			this->keyTimers[i]++;
-	}
-	if (this->keyTimers[chatKey] == 1)
-		this->_returnPressed = true;
-	if (this->keyTimers[VK_PRIOR] == 1 || (this->keyTimers[VK_PRIOR] > 36 && this->keyTimers[VK_PRIOR] % 6 == 0)) {
+	if (this->keysPressed[VK_PRIOR]) {
 		playSound(0x27);
 		this->_chatOffset += SCROLL_AMOUNT;
 		this->_chatTimer = max(this->_chatTimer, 180);
 	}
-	if (this->keyTimers[VK_NEXT] == 1 || (this->keyTimers[VK_NEXT] > 36 && this->keyTimers[VK_NEXT] % 6 == 0)) {
+	if (this->keysPressed[VK_NEXT]) {
 		if (this->_chatOffset < SCROLL_AMOUNT)
 			this->_chatOffset = 0;
 		else
@@ -1749,54 +1736,51 @@ void InLobbyMenu::_inputBoxUpdate()
 		playSound(0x27);
 	}
 	if (!this->_editingText) {
-		if (this->_returnPressed && this->keyTimers[chatKey] == 0) {
+		if (this->keysPressed[chatKey]) {
 			this->_editingText = true;
 			this->_initInputBox();
 			playSound(0x28);
 		}
-		return;
+		goto ret_reset_keysPressed;
 	}
-	if (this->keyTimers[VK_UP] == 1 || (this->keyTimers[VK_UP] > 36 && this->keyTimers[VK_UP] % 6 == 0)) {
+	if (this->keysPressed[VK_UP]) {
 		playSound(0x27);
 		this->_chatOffset += SCROLL_AMOUNT;
 		this->_chatTimer = max(this->_chatTimer, 180);
-		return;
+		goto ret_reset_keysPressed;
 	}
-	if (this->keyTimers[VK_DOWN] == 1 || (this->keyTimers[VK_DOWN] > 36 && this->keyTimers[VK_DOWN] % 6 == 0)) {
+	if (this->keysPressed[VK_DOWN]) {
 		if (this->_chatOffset < SCROLL_AMOUNT)
 			this->_chatOffset = 0;
 		else
 			this->_chatOffset -= SCROLL_AMOUNT;
 		this->_chatTimer = max(this->_chatTimer, 180);
 		playSound(0x27);
-		return;
+		goto ret_reset_keysPressed;
 	}
-	if (this->_returnPressed) {
-		if (this->keyTimers[chatKey] == 0) {
-			if (this->immComposition.empty()) {
-				if (this->_buffer.size() != 1) {
-					this->_sendMessage(std::wstring{this->_buffer.begin(), this->_buffer.end() - 1});
-					playSound(0x28);
-				} else
-					playSound(0x29);
-				this->_editingText = false;
-				this->_chatOffset = 0;
-			}
-			this->_returnPressed = false;
+	if (this->keysPressed[VK_RETURN]) {
+		if (this->immComposition.empty()) {
+			if (this->_buffer.size() != 1) {
+				this->_sendMessage(std::wstring{this->_buffer.begin(), this->_buffer.end() - 1});
+				playSound(0x28);
+			} else
+				playSound(0x29);
+			this->_editingText = false;
+			this->_chatOffset = 0;
 		}
-		return;
+		goto ret_reset_keysPressed;
 	}
 	this->_textMutex.lock();
 	if (this->immComposition.empty()) {
-		if (this->keyTimers[VK_HOME] == 1) {
+		if (this->keysPressed[VK_HOME]) {
 			playSound(0x27);
 			this->_updateTextCursor(0);
 		}
-		if (this->keyTimers[VK_END] == 1) {
+		if (this->keysPressed[VK_END]) {
 			playSound(0x27);
 			this->_updateTextCursor(this->_buffer.size() - 1);
 		}
-		if (this->keyTimers[VK_BACK] == 1 || (this->keyTimers[VK_BACK] > 36 && this->keyTimers[VK_BACK] % 6 == 0)) {
+		if (this->keysPressed[VK_BACK]) {
 			if (this->_textCursorPosIndex != 0) {
 				this->_buffer.erase(this->_buffer.begin() + this->_textCursorPosIndex - 1);
 				this->_updateTextCursor(this->_textCursorPosIndex - 1);
@@ -1804,20 +1788,20 @@ void InLobbyMenu::_inputBoxUpdate()
 				playSound(0x27);
 			}
 		}
-		if (this->keyTimers[VK_DELETE] == 1 || (this->keyTimers[VK_DELETE] > 36 && this->keyTimers[VK_DELETE] % 6 == 0)) {
+		if (this->keysPressed[VK_DELETE]) {
 			if (this->_textCursorPosIndex < this->_buffer.size() - 1) {
 				this->_buffer.erase(this->_buffer.begin() + this->_textCursorPosIndex);
 				playSound(0x27);
 				this->textChanged |= 1;
 			}
 		}
-		if (this->keyTimers[VK_LEFT] == 1 || (this->keyTimers[VK_LEFT] > 36 && this->keyTimers[VK_LEFT] % 3 == 0)) {
+		if (this->keysPressed[VK_LEFT]) {
 			if (this->_textCursorPosIndex != 0) {
 				this->_updateTextCursor(this->_textCursorPosIndex - 1);
 				playSound(0x27);
 			}
 		}
-		if (this->keyTimers[VK_RIGHT] == 1 || (this->keyTimers[VK_RIGHT] > 36 && this->keyTimers[VK_RIGHT] % 3 == 0)) {
+		if (this->keysPressed[VK_RIGHT]) {
 			if (this->_textCursorPosIndex != this->_buffer.size() - 1) {
 				this->_updateTextCursor(this->_textCursorPosIndex + 1);
 				playSound(0x27);
@@ -1842,6 +1826,8 @@ void InLobbyMenu::_inputBoxUpdate()
 	if (this->textChanged)
 		this->_updateCompositionSprite();
 	this->_textMutex.unlock();
+	ret_reset_keysPressed:
+	memset(this->keysPressed, 0, sizeof(this->keysPressed));
 }
 
 void InLobbyMenu::_initInputBox()
@@ -1849,7 +1835,7 @@ void InLobbyMenu::_initInputBox()
 	int ret;
 
 	playSound(0x28);
-	memset(this->keyTimers, 0, sizeof(this->keyTimers));
+	memset(this->keysPressed, 0, sizeof(this->keysPressed));
 	this->_lastPressed = 0;
 	this->_textTimer = 0;
 	this->_buffer.clear();
@@ -1863,7 +1849,6 @@ void InLobbyMenu::_initInputBox()
 	this->_textCursorPosIndex = 0;
 	this->_textSprite[0].rect.left = 0;
 	this->_editingText = true;
-	this->_returnPressed = false;
 
 	CANDIDATEFORM candidate;
 	RECT rect;
@@ -2321,11 +2306,6 @@ void InLobbyMenu::_updateCompositionSprite()
 		std::thread{cb}.join();
 	else
 		cb();
-}
-
-void InLobbyMenu::onCompositionResult()
-{
-	this->_returnPressed = false;
 }
 
 int InLobbyMenu::_getTextSize(unsigned int i)
