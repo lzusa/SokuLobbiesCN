@@ -55,11 +55,13 @@ wchar_t profilePath[MAX_PATH];
 wchar_t profileFolderPath[MAX_PATH];
 char modVersion[16] = "unknown";
 char servHost[64];
+char redirectIp[64];
 char *wineVersion = nullptr;
 unsigned hostPref;
 unsigned chatKey;
 unsigned lobbyJoinTries;
 unsigned lobbyJoinInterval;
+unsigned maxChatMessages;
 unsigned short servPort;
 unsigned short hostPort;
 bool hasSoku2 = false;
@@ -1088,6 +1090,7 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE hPar
 	freopen_s(&_, "CONOUT$", "w", stderr);
 #endif
 	wchar_t servHostW[sizeof(servHost)];
+	wchar_t redirectIpW[sizeof(redirectIp)];
 
 	loadSoku2Config();
 	GetModuleFileNameW(hMyModule, profilePath, 1024);
@@ -1096,11 +1099,13 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE hPar
 	wcscpy(profileFolderPath, profilePath);
 	PathAppendW(profilePath, L"SokuLobbies.ini");
 	GetPrivateProfileStringW(L"Lobby", L"Host", L"pinkysmile.fr", servHostW, sizeof(servHost) / sizeof(*servHost), profilePath);
+	GetPrivateProfileStringW(L"Lobby", L"RedirectIp", L"localhost", redirectIpW, sizeof(redirectIp) / sizeof(*redirectIp), profilePath);
 	servPort = GetPrivateProfileIntW(L"Lobby", L"Port", 5254, profilePath);
 	hostPort = GetPrivateProfileIntW(L"Lobby", L"HostPort", 10800, profilePath);
 	chatKey = GetPrivateProfileIntW(L"Lobby", L"ChatKey", VK_RETURN, profilePath);
 	lobbyJoinTries = GetPrivateProfileIntW(L"Lobby", L"JoinTries", 15, profilePath);
 	lobbyJoinInterval = GetPrivateProfileIntW(L"Lobby", L"JoinInterval", 1, profilePath);
+	maxChatMessages = GetPrivateProfileIntW(L"Lobby", L"MaxChatMessages", 100, profilePath);
 	lobbyJoinTries += !lobbyJoinTries;
 	lobbyJoinInterval += !lobbyJoinInterval;
 
@@ -1115,6 +1120,7 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE hPar
 	hostPref |= hostlist * Lobbies::HOSTPREF_ACCEPT_HOSTLIST;
 	printf("%S %i %i\n", profilePath, hostlist, hostPref);
 	wcstombs(servHost, servHostW, sizeof(servHost));
+	wcstombs(redirectIp, redirectIpW, sizeof(redirectIp));
 
 	// DWORD old;
 	VirtualProtect((PVOID)RDATA_SECTION_OFFSET, RDATA_SECTION_SIZE, PAGE_EXECUTE_WRITECOPY, &old);

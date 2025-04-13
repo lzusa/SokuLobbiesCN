@@ -20,10 +20,12 @@ struct Character {
 extern wchar_t profilePath[MAX_PATH];
 extern wchar_t profileFolderPath[MAX_PATH];
 extern char servHost[64];
+extern char redirectIp[64];
 extern char modVersion[16];
 extern char *wineVersion;
 extern unsigned lobbyJoinTries;
 extern unsigned lobbyJoinInterval;
+extern unsigned maxChatMessages;
 extern unsigned hostPref;
 extern unsigned chatKey;
 extern unsigned short servPort;
