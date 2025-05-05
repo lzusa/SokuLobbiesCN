@@ -1529,150 +1529,9 @@ void InLobbyMenu::_unhook()
 void InLobbyMenu::_addMessageToList(unsigned int channel, unsigned player, const std::string &msg)
 {
 	this->_chatTimer = 900;
-	std::list<Message> tmpChatMessages;
-	tmpChatMessages.emplace_front();
-
-	auto *m = &tmpChatMessages.front();
-	std::string line;
-	std::string word;
-	std::string token;
-	unsigned startPos = 0;
-	unsigned pos = 0;
-	unsigned wordPos = 0;
-	unsigned skip = 0;
-	unsigned short emoteId;
-	unsigned char emoteCtr = 0;
-	auto pushText = [&]{
-		if (line.empty())
-			return;
-
-		m->text.emplace_back();
-
-		auto &txt = m->text.back();
-		int texId = 0;
-
-		if (player == 0)
-			txt.sprite.tint = channel;
-		//txt.sprite.texture.createFromText(line.c_str(), this->_chatFont, {350, 300}, &txt.realSize);
-		if (!createTextTexture(texId, convertEncoding<char, wchar_t, UTF8Decode, UTF16Encode>(line).c_str(), this->_chatFont, {350, 300}, &txt.realSize))
-			puts("Error creating text texture");
-		txt.sprite.texture.setHandle(texId, {350, 300});
-		txt.sprite.rect.width = txt.realSize.x;
-		txt.sprite.rect.height = txt.realSize.y;
-		txt.pos.x = startPos;
-		if (!m->emotes.empty())
-			txt.pos.y = (txt.realSize.y - EMOTE_SIZE) / 2;
-		printf("Created sprite %x %i,%i %ux%u (%ux%u) %08x\n", texId, txt.pos.x, txt.pos.y, txt.realSize.x, txt.realSize.y, txt.sprite.texture.getSize().x, txt.sprite.texture.getSize().y, txt.sprite.tint.operator unsigned());
-		startPos = pos;
-		line.clear();
-	};
-	auto nextLine = [&]{
-		pushText();
-		tmpChatMessages.emplace_front();
-		m = &tmpChatMessages.front();
-		pos = 0;
-	};
-	size_t lastTokenSize = 0;
-
-	line.reserve(msg.size());
-	word.reserve(msg.size());
-	for (unsigned char c : msg) {
-		if (emoteCtr) {
-			emoteId |= (c & 0x7F) << ((2 - emoteCtr) * 7);
-			emoteCtr--;
-			if (!emoteCtr) {
-				if (pos + EMOTE_SIZE > MAX_LINE_SIZE) {
-					nextLine();
-					startPos = 0;
-				}
-				m->emotes.emplace_back();
-				if (emoteId >= lobbyData->emotes.size())
-					printf("Received invalid emote! %u < %u\n", emoteId, lobbyData->emotes.size());
-				m->emotes.back().id = emoteId;
-				m->emotes.back().pos.x = startPos;
-				pos += EMOTE_SIZE;
-				startPos = pos;
-				for (auto &g : m->text)
-					g.pos.y = (g.realSize.y - EMOTE_SIZE) / 2;
-			}
-		} else if (skip) {
-			if ((c & 0b11000000) == 0x80) {
-				skip--;
-				token += c;
-			} else
-				skip = 0;
-			word += c;
-			if (skip != 0)
-				continue;
-			lastTokenSize = token.size();
-			wordPos += this->_getTextSize(UTF8Decode(token)[0]);
-		} else if (c == 1) {
-			line += word;
-			pos += wordPos;
-			wordPos = 0;
-			word.clear();
-			pushText();
-			emoteId = 0;
-			emoteCtr = 2;
-			continue;
-		} else if (c == '\n') {
-			line += word;
-			pos += wordPos;
-			word.clear();
-			wordPos = 0;
-			nextLine();
-			startPos = 0;
-			continue;
-		} else if (c >= 0x80) {
-			skip = c >= 0xC0;
-			skip += c >= 0xE0;
-			skip += c >= 0xF0;
-			token.clear();
-			token += c;
-			word += c;
-			continue;
-		} else if (isspace(c)) {
-			if (word.empty()) {
-				if (pos == 0)
-					continue;
-			} else {
-				line += word;
-				pos += wordPos;
-				word.clear();
-				wordPos = 0;
-			}
-			line += ' ';
-			lastTokenSize = 1;
-			pos += this->_getTextSize(' ');
-		} else {
-			lastTokenSize = 1;
-			word += c;
-			wordPos += this->_getTextSize(c);
-		}
-		if (pos + wordPos > MAX_LINE_SIZE) {
-			if (pos == 0) {
-				line = word.substr(0, word.size() - lastTokenSize);
-				word.erase(word.begin(), word.end() - lastTokenSize);
-				wordPos = this->_getTextSize(UTF8Decode(word)[0]);
-			}
-			nextLine();
-			startPos = 0;
-		}
-	}
-	line += word;
-	pushText();
 	std::lock_guard<std::mutex> lock(this->_chatMessagesMutex);
-	this->_chatMessages.splice(this->_chatMessages.begin(), tmpChatMessages);
-	if (this->_chatMessages.size() > maxChatMessages) {
-		// Move those very old message into tmpChatMessages, so that they will be destructed with tmpChatMessages,
-		// after the mutex is unlocked.
-		// As a result, some D3D9 operations which might block will run outside the lock of _chatMessages.
-		auto index = this->_chatMessages.end();
-		size_t toRemoveCount = this->_chatMessages.size() - maxChatMessages;
-		for (size_t i = 0; i < toRemoveCount; i++)
-			index--;
-		tmpChatMessages.splice(tmpChatMessages.end(), this->_chatMessages, index, this->_chatMessages.end());
-	}
+	this->_chatMessages.emplace_front();
+	this->_chatMessages.front().lazy_message.emplace(channel, player, msg);
 }
 
 void InLobbyMenu::onKeyPressed(unsigned chr)
@@ -1990,48 +1849,6 @@ void InLobbyMenu::updateChat(bool inGame)
 		unsigned char alpha = this->_chatTimer > 120 ? 255 : (this->_chatTimer * 255 / 120);
 
 		this->_chatSeat.tint.a = alpha;
-
-		auto remaining = this->_chatOffset;
-		SokuLib::Vector2i pos{292, 180};
-
-		std::lock_guard<std::mutex> lock(this->_chatMessagesMutex);
-		for (auto &msg : this->_chatMessages) {
-			if (pos.y <= 3) {
-				msg.farUp = true;
-				break;
-			}
-
-			int maxSize = msg.emotes.empty() ? 0 : EMOTE_SIZE;
-
-			msg.farUp = false;
-			msg.farDown = true;
-			for (auto &text : msg.text) {
-				if (remaining <= text.realSize.y - text.pos.y) {
-					auto p = pos;
-
-					if (!remaining)
-						p += text.pos;
-					else
-						p.y += min(0, text.pos.y + static_cast<int>(remaining));
-					this->_updateMessageSprite(p, remaining < -text.pos.y ? 0 : remaining + text.pos.y, text.realSize, text.sprite, alpha);
-					msg.farDown = false;
-				} else
-					text.sprite.tint.a = 0;
-				maxSize = max(maxSize, text.realSize.y);
-			}
-			for (auto &emote : msg.emotes) {
-				emote.offset = pos;
-				emote.cutRemain = remaining;
-			}
-			if (remaining <= EMOTE_SIZE && !msg.emotes.empty())
-				msg.farDown = false;
-			if (remaining > maxSize)
-				remaining -= maxSize;
-			else {
-				pos.y -= maxSize - remaining;
-				remaining = 0;
-			}
-		}
 	}
 }
 
@@ -2041,12 +1858,186 @@ void InLobbyMenu::renderChat()
 		return;
 	if (this->_chatSeat.tint.a) {
 		this->_chatSeat.draw();
+		std::list<Message> chatMessagesToRemove;
 
 		std::lock_guard<std::mutex> lock(this->_chatMessagesMutex);
-		for (auto &msg: this->_chatMessages) {
-			if (msg.farUp)
+	
+		auto remaining = this->_chatOffset;
+		SokuLib::Vector2i pos{292, 180};
+
+		for (auto it = this->_chatMessages.begin(); it != this->_chatMessages.end(); it++) {
+			Message &msg = *it;
+
+			if (pos.y <= 3) {
+				// msg.farUp = true;
 				break;
-			if (msg.farDown)
+			}
+
+			// create sprites if they haven't been created
+			if (msg.lazy_message.has_value()) {
+				auto m = it;
+				std::string line;
+				std::string word;
+				std::string token;
+				unsigned startPos = 0;
+				unsigned pos = 0;
+				unsigned wordPos = 0;
+				unsigned skip = 0;
+				unsigned short emoteId;
+				unsigned char emoteCtr = 0;
+				auto pushText = [&]{
+					if (line.empty())
+						return;
+
+					m->text.emplace_back();
+
+					auto &txt = m->text.back();
+					int texId = 0;
+
+					if (msg.lazy_message->player == 0)
+						txt.sprite.tint = msg.lazy_message->channel;
+					//txt.sprite.texture.createFromText(line.c_str(), this->_chatFont, {350, 300}, &txt.realSize);
+					if (!createTextTexture(texId, convertEncoding<char, wchar_t, UTF8Decode, UTF16Encode>(line).c_str(), this->_chatFont, {350, 300}, &txt.realSize))
+						puts("Error creating text texture");
+					txt.sprite.texture.setHandle(texId, {350, 300});
+					txt.sprite.rect.width = txt.realSize.x;
+					txt.sprite.rect.height = txt.realSize.y;
+					txt.pos.x = startPos;
+					if (!m->emotes.empty())
+						txt.pos.y = (txt.realSize.y - EMOTE_SIZE) / 2;
+					printf("Created sprite %x %i,%i %ux%u (%ux%u) %08x\n", texId, txt.pos.x, txt.pos.y, txt.realSize.x, txt.realSize.y, txt.sprite.texture.getSize().x, txt.sprite.texture.getSize().y, txt.sprite.tint.operator unsigned());
+					startPos = pos;
+					line.clear();
+				};
+				auto nextLine = [&]{
+					pushText();
+					m = this->_chatMessages.emplace(m);
+					pos = 0;
+				};
+				size_t lastTokenSize = 0;
+
+				line.reserve(msg.lazy_message->msg.size());
+				word.reserve(msg.lazy_message->msg.size());
+				for (unsigned char c : msg.lazy_message->msg) {
+					if (emoteCtr) {
+						emoteId |= (c & 0x7F) << ((2 - emoteCtr) * 7);
+						emoteCtr--;
+						if (!emoteCtr) {
+							if (pos + EMOTE_SIZE > MAX_LINE_SIZE) {
+								nextLine();
+								startPos = 0;
+							}
+							m->emotes.emplace_back();
+							if (emoteId >= lobbyData->emotes.size())
+								printf("Received invalid emote! %u < %u\n", emoteId, lobbyData->emotes.size());
+							m->emotes.back().id = emoteId;
+							m->emotes.back().pos.x = startPos;
+							pos += EMOTE_SIZE;
+							startPos = pos;
+							for (auto &g : m->text)
+								g.pos.y = (g.realSize.y - EMOTE_SIZE) / 2;
+						}
+					} else if (skip) {
+						if ((c & 0b11000000) == 0x80) {
+							skip--;
+							token += c;
+						} else
+							skip = 0;
+						word += c;
+						if (skip != 0)
+							continue;
+						lastTokenSize = token.size();
+						wordPos += this->_getTextSize(UTF8Decode(token)[0]);
+					} else if (c == 1) {
+						line += word;
+						pos += wordPos;
+						wordPos = 0;
+						word.clear();
+						pushText();
+						emoteId = 0;
+						emoteCtr = 2;
+						continue;
+					} else if (c == '\n') {
+						line += word;
+						pos += wordPos;
+						word.clear();
+						wordPos = 0;
+						nextLine();
+						startPos = 0;
+						continue;
+					} else if (c >= 0x80) {
+						skip = c >= 0xC0;
+						skip += c >= 0xE0;
+						skip += c >= 0xF0;
+						token.clear();
+						token += c;
+						word += c;
+						continue;
+					} else if (isspace(c)) {
+						if (word.empty()) {
+							if (pos == 0)
+								continue;
+						} else {
+							line += word;
+							pos += wordPos;
+							word.clear();
+							wordPos = 0;
+						}
+						line += ' ';
+						lastTokenSize = 1;
+						pos += this->_getTextSize(' ');
+					} else {
+						lastTokenSize = 1;
+						word += c;
+						wordPos += this->_getTextSize(c);
+					}
+					if (pos + wordPos > MAX_LINE_SIZE) {
+						if (pos == 0) {
+							line = word.substr(0, word.size() - lastTokenSize);
+							word.erase(word.begin(), word.end() - lastTokenSize);
+							wordPos = this->_getTextSize(UTF8Decode(word)[0]);
+						}
+						nextLine();
+						startPos = 0;
+					}
+				}
+				line += word;
+				pushText();
+				msg.lazy_message.reset();
+			}
+
+			int maxSize = msg.emotes.empty() ? 0 : EMOTE_SIZE;
+
+			// msg.farUp = false;
+			bool farDown = true;
+			for (auto &text : msg.text) {
+				if (remaining <= text.realSize.y - text.pos.y) {
+					auto p = pos;
+
+					if (!remaining)
+						p += text.pos;
+					else
+						p.y += min(0, text.pos.y + static_cast<int>(remaining));
+					this->_updateMessageSprite(p, remaining < -text.pos.y ? 0 : remaining + text.pos.y, text.realSize, text.sprite, this->_chatSeat.tint.a);
+					farDown = false;
+				} else
+					text.sprite.tint.a = 0;
+				maxSize = max(maxSize, text.realSize.y);
+			}
+			for (auto &emote : msg.emotes) {
+				emote.offset = pos;
+				emote.cutRemain = remaining;
+			}
+			if (remaining <= EMOTE_SIZE && !msg.emotes.empty())
+				farDown = false;
+			if (remaining > maxSize)
+				remaining -= maxSize;
+			else {
+				pos.y -= maxSize - remaining;
+				remaining = 0;
+			}
+
+			if (farDown)
 				continue;
 			for (auto &text : msg.text) {
 				//SokuLib::SpriteEx s;
@@ -2088,6 +2079,17 @@ void InLobbyMenu::renderChat()
 				emoteObj.sprite.setPosition(pos);
 				emoteObj.sprite.draw();
 			}
+		}
+
+		if (this->_chatMessages.size() > maxChatMessages) {
+			// Move those very old message into tmpChatMessages, so that they will be destructed with tmpChatMessages,
+			// after the mutex is unlocked.
+			// As a result, some D3D9 operations which might block will run outside the lock of _chatMessages.
+			auto index = this->_chatMessages.end();
+			size_t toRemoveCount = this->_chatMessages.size() - maxChatMessages;
+			for (size_t i = 0; i < toRemoveCount; i++)
+				index--;
+			chatMessagesToRemove.splice(chatMessagesToRemove.end(), this->_chatMessages, index, this->_chatMessages.end());
 		}
 	}
 	if (this->_editingText) {

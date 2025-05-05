@@ -31,11 +31,21 @@ private:
 		SokuLib::Vector2i pos;
 		SokuLib::Vector2i offset;
 	};
+	struct LazyMessage {
+		const unsigned int channel;
+		const unsigned player;
+		const std::string msg;
+		LazyMessage(unsigned int channel, unsigned player, const std::string &msg) :
+			channel(channel),
+			player(player),
+			msg(msg) {
+
+		}
+	};
 	struct Message {
 		std::vector<MessageEmote> emotes;
 		std::list<MessageText> text;
-		bool farDown = false;
-		bool farUp = false;
+		std::optional<LazyMessage> lazy_message;
 	};
 	struct ArcadeMachine {
 		unsigned id;
