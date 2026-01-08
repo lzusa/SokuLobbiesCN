@@ -7,6 +7,12 @@
 #include <filesystem>
 #include <random>
 #include <cstdlib>
+#include <algorithm>
+#include <chrono>
+#include <ctime>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include "InLobbyMenu.hpp"
 #include "LobbyData.hpp"
 #include "data.hpp"
@@ -427,6 +433,7 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 	};
 	this->_connection->onMsg = [this](int32_t channel, int32_t player, const std::string &msg){
 		playSound(49);
+		this->_logChatToFile(player, msg);
 		this->_addMessageToList(channel, player, msg);
 	};
 	this->_connection->onConnectRequest = [this](const std::string &ip, unsigned short port, bool spectate){
@@ -1667,6 +1674,33 @@ void InLobbyMenu::_addMessageToList(unsigned int channel, unsigned player, const
 		for (size_t i = 0; i < toRemoveCount; i++)
 			index--;
 		tmpChatMessages.splice(tmpChatMessages.end(), this->_chatMessages, index, this->_chatMessages.end());
+	}
+}
+
+void InLobbyMenu::_logChatToFile(unsigned player, const std::string &msg)
+{
+	static std::mutex logMutex;
+	if (player == 0)
+		return; // Skip system/notification lines; keep only user chat
+	try {
+		std::lock_guard<std::mutex> guard(logMutex);
+		auto dir = std::filesystem::path(profileFolderPath) / "chatlog";
+		std::filesystem::create_directories(dir);
+		auto now = std::chrono::system_clock::now();
+		auto tt = std::chrono::system_clock::to_time_t(now);
+		std::tm local{};
+		localtime_s(&local, &tt);
+		std::ostringstream filename;
+		filename << std::put_time(&local, "%Y-%m-%d") << ".txt";
+		std::string sanitized = msg;
+		for (auto &ch : sanitized)
+			if (ch == '\n' || ch == '\r')
+				ch = ' ';
+		std::ofstream out(dir / filename.str(), std::ios::app);
+		if (!out)
+			return;
+		out << std::put_time(&local, "%H:%M:%S") << " " << sanitized << "\n";
+	} catch (...) {
 	}
 }
 

@@ -140,6 +140,7 @@ private:
 
 	void _updateMessageSprite(SokuLib::Vector2i pos, unsigned int remaining, SokuLib::Vector2i realSize, SokuLib::DrawUtils::Sprite &sprite, unsigned char alpha);
 	void _addMessageToList(unsigned channel, unsigned player, const std::string &msg);
+	void _logChatToFile(unsigned player, const std::string &msg);
 	void _inputBoxUpdate();
 	void _initInputBox();
 	void _updateTextCursor(int pos);
