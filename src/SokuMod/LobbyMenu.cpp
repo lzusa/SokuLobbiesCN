@@ -900,8 +900,7 @@ void LobbyMenu::_connectLoop()
 							c->name.rect.width = c->name.texture.getSize().x;
 							c->name.rect.height = c->name.texture.getSize().y;
 							c->name.tint = SokuLib::Color::Red;
-							if (this->_active)
-								playSound(38);
+
 						};
 						runOnUI(fct);
 					};
