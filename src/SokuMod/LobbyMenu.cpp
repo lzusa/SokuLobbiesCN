@@ -752,7 +752,7 @@ void LobbyMenu::_masterServerLoop()
 			try {
 				auto fct = [this]{
 					this->_loadingText.texture.createFromText(
-						"Connecting to server...",
+						"Connecting to server...<br>Press S to switch to normal mode",
 						lobbyData->getFont(16),
 						{600, 74}
 					);
@@ -764,13 +764,18 @@ void LobbyMenu::_masterServerLoop()
 			} catch (std::exception &e) {
 				auto fct = [this, e]{
 					this->_loadingText.texture.createFromText(
-						("Connection failed:<br><color FF0000>" + std::string(e.what()) + "</color>").c_str(),
+						("Connection failed, auto switch to normal mode:<br><color FF0000>" + std::string(e.what()) + "</color>").c_str(),
 						lobbyData->getFont(16),
 						{600, 74});
 				};
 				runOnUI(fct);
 				this->_lastError = e.what();
+				playSound(0x28);
+				activated = !activated;
+				this->_open = false;
+				
 				goto fail;
+				
 			}
 
 		try {
