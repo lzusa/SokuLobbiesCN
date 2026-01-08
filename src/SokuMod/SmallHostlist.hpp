@@ -126,6 +126,8 @@ private:
 	bool _selected = false;
 	bool _spectator = false;
 	unsigned _hostSelect = 0;
+	unsigned _hostOffset = 0;
+	unsigned _playOffset = 0;
 	std::vector<std::unique_ptr<HostEntry>> _hostEntries;
 	std::vector<std::unique_ptr<PlayEntry>> _playEntries;
 	std::mutex _entriesMutex;

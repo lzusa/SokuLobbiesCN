@@ -3,7 +3,9 @@
 //
 
 #define _USE_MATH_DEFINES
+#include <algorithm>
 #include <filesystem>
+
 #include "nlohmann/json.hpp"
 #include "data.hpp"
 #include "SmallHostlist.hpp"
@@ -12,6 +14,7 @@
 #include "encodingConverter.hpp"
 
 #define MAX_OVERLAY_ANIMATION 15
+#define MAX_VISIBLE_ENTRIES 11
 #define modifyPos(x, y) ((SokuLib::Vector2i{static_cast<int>(x), static_cast<int>(y)} * this->_ratio + this->_pos).to<int>())
 
 SmallHostlist::SmallHostlist(float ratio, SokuLib::Vector2i pos, SokuLib::MenuConnect *parent) :
@@ -154,6 +157,26 @@ void SmallHostlist::_displaySokuCursor(SokuLib::Vector2i pos, SokuLib::Vector2u 
 
 bool SmallHostlist::update()
 {
+	auto adjustOffset = [this](bool spectator){
+		auto size = spectator ? this->_playEntries.size() : this->_hostEntries.size();
+		auto &offset = spectator ? this->_playOffset : this->_hostOffset;
+
+		if (size == 0) {
+			offset = 0;
+			return;
+		}
+		if (size <= MAX_VISIBLE_ENTRIES) {
+			offset = 0;
+			return;
+		}
+		if (this->_hostSelect >= size)
+			this->_hostSelect = static_cast<unsigned>(size - 1);
+		if (this->_hostSelect >= offset + MAX_VISIBLE_ENTRIES)
+			offset = this->_hostSelect - MAX_VISIBLE_ENTRIES + 1;
+		if (this->_hostSelect < offset)
+			offset = this->_hostSelect;
+	};
+
 	if (this->_overlayTimer <= MAX_OVERLAY_ANIMATION) {
 		int translate = (200 * this->_ratio) * std::pow((float)this->_overlayTimer / MAX_OVERLAY_ANIMATION, 2);
 
@@ -208,6 +231,8 @@ bool SmallHostlist::update()
 	if (std::abs(SokuLib::inputMgrs.input.horizontalAxis) == 1) {
 		this->_spectator = !this->_spectator;
 		this->_hostSelect = 0;
+		this->_hostOffset = 0;
+		this->_playOffset = 0;
 		playSound(0x27);
 		return true;
 	}
@@ -249,12 +274,17 @@ bool SmallHostlist::update()
 		auto axis = std::abs(SokuLib::inputMgrs.input.verticalAxis);
 
 		if (axis == 1 || (axis >= 36 && axis % 6 == 0)) {
+			auto size = this->_spectator ? this->_playEntries.size() : this->_hostEntries.size();
+
+			if (!size)
+				return true;
 			if (SokuLib::inputMgrs.input.verticalAxis > 0)
-				this->_hostSelect = (this->_hostSelect + 1) % (this->_spectator ? this->_playEntries.size() : this->_hostEntries.size());
+				this->_hostSelect = (this->_hostSelect + 1) % size;
 			else if (this->_hostSelect == 0)
-				this->_hostSelect = (this->_spectator ? this->_playEntries.size() : this->_hostEntries.size()) - 1;
+				this->_hostSelect = static_cast<unsigned>(size - 1);
 			else
 				this->_hostSelect--;
+			adjustOffset(this->_spectator);
 			playSound(0x27);
 			return true;
 		}
@@ -278,16 +308,20 @@ void SmallHostlist::render()
 		elem->render();
 	this->_entriesMutex.lock();
 	(&this->_hosting)[this->_spectator].draw();
-	if (!this->_spectator)
-		for (unsigned i = 0; i < this->_hostEntries.size(); i++) {
+	if (!this->_spectator) {
+		auto start = (std::min)(this->_hostOffset, static_cast<unsigned>(this->_hostEntries.size() > 0 ? this->_hostEntries.size() - 1 : 0));
+		auto end = (std::min)(this->_hostEntries.size(), static_cast<size_t>(start + MAX_VISIBLE_ENTRIES));
+
+		for (unsigned i = start; i < end; i++) {
+			auto row = i - start;
 			auto &entry = *this->_hostEntries[i];
 			auto flag = lobbyData->flags.find(entry.country);
 
 			if (this->_hostSelect == i && this->_selected)
-				this->_displaySokuCursor({262, static_cast<int>(118 + i * 16 / this->_ratio)}, {375, static_cast<unsigned>(16 / this->_ratio)});
+				this->_displaySokuCursor({262, static_cast<int>(118 + row * 16 / this->_ratio)}, {375, static_cast<unsigned>(16 / this->_ratio)});
 			if (flag == lobbyData->flags.end())
 				flag = lobbyData->flags.find("default");
-			flag->second->setPosition(modifyPos(266, 118) + SokuLib::Vector2i{0, static_cast<int>(i * 16)});
+			flag->second->setPosition(modifyPos(266, 118) + SokuLib::Vector2i{0, static_cast<int>(row * 16)});
 			flag->second->setSize({16, 16});
 			flag->second->draw();
 
@@ -309,19 +343,24 @@ void SmallHostlist::render()
 				entry.msg.rect.width = size.x;
 				entry.msg.rect.height = size.y;
 			}
-			entry.name.setPosition(modifyPos(262, 120) + SokuLib::Vector2i{16, static_cast<int>(i * 16)});
+			entry.name.setPosition(modifyPos(262, 120) + SokuLib::Vector2i{16, static_cast<int>(row * 16)});
 			entry.name.draw();
-			entry.msg.setPosition(modifyPos(402, 120) + SokuLib::Vector2i{16, static_cast<int>(i * 16)});
+			entry.msg.setPosition(modifyPos(402, 120) + SokuLib::Vector2i{16, static_cast<int>(row * 16)});
 			entry.msg.draw();
 		}
-	if (this->_spectator)
-		for (unsigned i = 0; i < this->_playEntries.size(); i++) {
+	}
+	if (this->_spectator) {
+		auto start = (std::min)(this->_playOffset, static_cast<unsigned>(this->_playEntries.size() > 0 ? this->_playEntries.size() - 1 : 0));
+		auto end = (std::min)(this->_playEntries.size(), static_cast<size_t>(start + MAX_VISIBLE_ENTRIES));
+
+		for (unsigned i = start; i < end; i++) {
+			auto row = i - start;
 			auto &entry = *this->_playEntries[i];
 			auto flag1 = lobbyData->flags.find(entry.country1);
 			auto flag2 = lobbyData->flags.find(entry.country2);
 
 			if (this->_hostSelect == i && this->_selected)
-				this->_displaySokuCursor({266, static_cast<int>(118 + i * 16 / this->_ratio)}, {375, static_cast<unsigned>(16 / this->_ratio)});
+				this->_displaySokuCursor({266, static_cast<int>(118 + row * 16 / this->_ratio)}, {375, static_cast<unsigned>(16 / this->_ratio)});
 			if (!entry.names.texture.hasTexture()) {
 				SokuLib::Vector2i size;
 
@@ -330,7 +369,7 @@ void SmallHostlist::render()
 				entry.names.rect.width = size.x;
 				entry.names.rect.height = size.y;
 			}
-			entry.names.setPosition(modifyPos(430, 120) + SokuLib::Vector2i{ - entry.names.rect.width / 2, static_cast<int>(i * 16)});
+			entry.names.setPosition(modifyPos(430, 120) + SokuLib::Vector2i{ - entry.names.rect.width / 2, static_cast<int>(row * 16)});
 			entry.names.draw();
 
 			if (flag1 == lobbyData->flags.end())
@@ -368,6 +407,7 @@ void SmallHostlist::render()
 				p2->sprite.draw();
 			}
 		}
+	}
 	this->_entriesMutex.unlock();
 	this->_error.draw();
 }
@@ -382,6 +422,8 @@ static std::string limitStr(const std::string &str, unsigned limit)
 void SmallHostlist::_refreshHostlist()
 {
 	bool locked = false;
+
+	
 
 	try {
 		nlohmann::json val = nlohmann::json::parse(lobbyData->httpRequest("https://konni.delthas.fr/games"));
@@ -455,6 +497,22 @@ void SmallHostlist::_refreshHostlist()
 		this->_playEntries.erase(std::remove_if(this->_playEntries.begin(), this->_playEntries.end(), [](const std::unique_ptr<PlayEntry> &a){
 			return a->deleted;
 		}), this->_playEntries.end());
+
+		if (this->_spectator) {
+			if (this->_playEntries.size() <= MAX_VISIBLE_ENTRIES)
+				this->_playOffset = 0;
+			else if (this->_playOffset + MAX_VISIBLE_ENTRIES > this->_playEntries.size())
+				this->_playOffset = static_cast<unsigned>(this->_playEntries.size() - MAX_VISIBLE_ENTRIES);
+			if (this->_hostSelect >= this->_playEntries.size())
+				this->_hostSelect = this->_playEntries.empty() ? 0u : static_cast<unsigned>(this->_playEntries.size() - 1);
+		} else {
+			if (this->_hostEntries.size() <= MAX_VISIBLE_ENTRIES)
+				this->_hostOffset = 0;
+			else if (this->_hostOffset + MAX_VISIBLE_ENTRIES > this->_hostEntries.size())
+				this->_hostOffset = static_cast<unsigned>(this->_hostEntries.size() - MAX_VISIBLE_ENTRIES);
+			if (this->_hostSelect >= this->_hostEntries.size())
+				this->_hostSelect = this->_hostEntries.empty() ? 0u : static_cast<unsigned>(this->_hostEntries.size() - 1);
+		}
 		this->_entriesMutex.unlock();
 		locked = false;
 		if (newHost)
