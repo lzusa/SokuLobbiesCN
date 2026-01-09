@@ -1573,6 +1573,8 @@ void InLobbyMenu::onKeyPressed(unsigned chr)
 	if (chr == 0x7F || chr < 32 || !this->_editingText)
 		return;
 	this->_textMutex.lock();
+	if (this->_hasSelection())
+		this->_deleteSelection();
 	if (this->_lastPressed && this->_textTimer == 0) {
 		std::basic_string<unsigned> s{&this->_lastPressed, &this->_lastPressed + 1};
 		auto result = UTF16Encode(s);
@@ -1593,6 +1595,8 @@ void InLobbyMenu::onKeyPressed(unsigned chr)
 void InLobbyMenu::onKeyReleased()
 {
 	this->_textMutex.lock();
+	if (this->_hasSelection())
+		this->_deleteSelection();
 	if (this->_lastPressed && this->_textTimer == 0) {
 		std::basic_string<unsigned> s{&this->_lastPressed, &this->_lastPressed + 1};
 		auto result = UTF16Encode(s);
@@ -1615,6 +1619,7 @@ void InLobbyMenu::_inputBoxUpdate()
 	if (GetForegroundWindow() != SokuLib::window)
 		return;
 	std::lock_guard<std::mutex> lock_(this->keyTimersMutex);
+	bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
 	if (this->keysPressed[VK_PRIOR]) {
 		playSound(0x27);
 		this->_chatOffset += SCROLL_AMOUNT;
@@ -1634,6 +1639,15 @@ void InLobbyMenu::_inputBoxUpdate()
 			this->_initInputBox();
 			playSound(0x28);
 		}
+		goto ret_reset_keysPressed;
+	}
+	if (ctrlDown && this->keysPressed['C']) {
+		this->_copySelectionToClipboard();
+		playSound(0x27);
+		goto ret_reset_keysPressed;
+	}
+	if (ctrlDown && this->keysPressed['V']) {
+		this->_pasteFromClipboard();
 		goto ret_reset_keysPressed;
 	}
 	if (this->keysPressed[VK_UP]) {
@@ -1659,6 +1673,7 @@ void InLobbyMenu::_inputBoxUpdate()
 			} else
 				playSound(0x29);
 			this->_editingText = false;
+			this->_clearSelection();
 			this->_chatOffset = 0;
 		}
 		goto ret_reset_keysPressed;
@@ -1668,13 +1683,17 @@ void InLobbyMenu::_inputBoxUpdate()
 		if (this->keysPressed[VK_HOME]) {
 			playSound(0x27);
 			this->_updateTextCursor(0);
+			this->_clearSelection();
 		}
 		if (this->keysPressed[VK_END]) {
 			playSound(0x27);
 			this->_updateTextCursor(this->_buffer.size() - 1);
+			this->_clearSelection();
 		}
 		if (this->keysPressed[VK_BACK]) {
-			if (this->_textCursorPosIndex != 0) {
+			if (this->_deleteSelection()) {
+				playSound(0x27);
+			} else if (this->_textCursorPosIndex != 0) {
 				this->_buffer.erase(this->_buffer.begin() + this->_textCursorPosIndex - 1);
 				this->_updateTextCursor(this->_textCursorPosIndex - 1);
 				this->textChanged |= 1;
@@ -1682,20 +1701,30 @@ void InLobbyMenu::_inputBoxUpdate()
 			}
 		}
 		if (this->keysPressed[VK_DELETE]) {
-			if (this->_textCursorPosIndex < this->_buffer.size() - 1) {
+			if (this->_deleteSelection()) {
+				playSound(0x27);
+			} else if (this->_textCursorPosIndex < this->_buffer.size() - 1) {
 				this->_buffer.erase(this->_buffer.begin() + this->_textCursorPosIndex);
 				playSound(0x27);
 				this->textChanged |= 1;
 			}
 		}
 		if (this->keysPressed[VK_LEFT]) {
-			if (this->_textCursorPosIndex != 0) {
+			if (this->_hasSelection()) {
+				this->_updateTextCursor((std::min)(this->_selectionStart, this->_selectionEnd));
+				this->_clearSelection();
+				playSound(0x27);
+			} else if (this->_textCursorPosIndex != 0) {
 				this->_updateTextCursor(this->_textCursorPosIndex - 1);
 				playSound(0x27);
 			}
 		}
 		if (this->keysPressed[VK_RIGHT]) {
-			if (this->_textCursorPosIndex != this->_buffer.size() - 1) {
+			if (this->_hasSelection()) {
+				this->_updateTextCursor((std::max)(this->_selectionStart, this->_selectionEnd));
+				this->_clearSelection();
+				playSound(0x27);
+			} else if (this->_textCursorPosIndex != this->_buffer.size() - 1) {
 				this->_updateTextCursor(this->_textCursorPosIndex + 1);
 				playSound(0x27);
 			}
@@ -1706,6 +1735,8 @@ void InLobbyMenu::_inputBoxUpdate()
 				std::basic_string<unsigned> s{&this->_lastPressed, &this->_lastPressed + 1};
 				auto result = UTF16Encode(s);
 
+				if (this->_hasSelection())
+					this->_deleteSelection();
 				if (result.size() + this->_buffer.size() <= CHAT_CHARACTER_LIMIT) {
 					this->_buffer.insert(this->_buffer.begin() + this->_textCursorPosIndex, result.begin(), result.end());
 					this->_updateTextCursor(this->_textCursorPosIndex + 1);
@@ -1733,6 +1764,7 @@ void InLobbyMenu::_initInputBox()
 	this->_textTimer = 0;
 	this->_buffer.clear();
 	this->_buffer.push_back(0);
+	this->_clearSelection();
 
 	this->textChanged = 3;
 	this->_updateCompositionSprite();
@@ -1761,6 +1793,141 @@ void InLobbyMenu::_initInputBox()
 	candidate.dwStyle = CFS_CANDIDATEPOS;
 	candidate.ptCurrentPos = result;
 	ImmSetCandidateWindow(this->immCtx, &candidate);
+}
+
+void InLobbyMenu::_clearSelection()
+{
+	this->_selectionStart = -1;
+	this->_selectionEnd = -1;
+}
+
+bool InLobbyMenu::_hasSelection() const
+{
+	return this->_selectionStart >= 0 && this->_selectionEnd >= 0 && this->_selectionStart != this->_selectionEnd;
+}
+
+bool InLobbyMenu::_deleteSelection()
+{
+	if (!this->_hasSelection())
+		return false;
+
+	int realLen = this->_buffer.size() > 0 ? this->_buffer.size() - 1 : 0;
+	int start = (std::min)(this->_selectionStart, this->_selectionEnd);
+	int end = (std::max)(this->_selectionStart, this->_selectionEnd);
+	if (start < 0)
+		start = 0;
+	if (end < 0)
+		end = 0;
+	if (start > realLen)
+		start = realLen;
+	if (end > realLen)
+		end = realLen;
+
+	if (start == end) {
+		this->_clearSelection();
+		return false;
+	}
+
+	this->_buffer.erase(this->_buffer.begin() + start, this->_buffer.begin() + end);
+	if (this->_buffer.empty() || this->_buffer.back() != 0)
+		this->_buffer.push_back(0);
+	this->_updateTextCursor(start);
+	this->_clearSelection();
+	this->textChanged |= 1;
+	return true;
+}
+
+std::wstring InLobbyMenu::_getSelectedText() const
+{
+	if (!this->_hasSelection())
+		return {};
+
+	int realLen = this->_buffer.size() > 0 ? this->_buffer.size() - 1 : 0;
+	int start = (std::min)(this->_selectionStart, this->_selectionEnd);
+	int end = (std::max)(this->_selectionStart, this->_selectionEnd);
+	if (start < 0)
+		start = 0;
+	if (end < 0)
+		end = 0;
+	if (start > realLen)
+		start = realLen;
+	if (end > realLen)
+		end = realLen;
+
+	return std::wstring{this->_buffer.begin() + start, this->_buffer.begin() + end};
+}
+
+void InLobbyMenu::_copySelectionToClipboard()
+{
+	std::lock_guard<std::mutex> textLock(this->_textMutex);
+	if (this->_buffer.empty())
+		return;
+	std::wstring text = this->_hasSelection() ? this->_getSelectedText() : std::wstring{this->_buffer.begin(), this->_buffer.end() - 1};
+
+	if (text.empty())
+		return;
+	if (!OpenClipboard(SokuLib::window))
+		return;
+	EmptyClipboard();
+	size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+	HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+
+	if (!mem) {
+		CloseClipboard();
+		return;
+	}
+	wchar_t *data = static_cast<wchar_t *>(GlobalLock(mem));
+	if (!data) {
+		GlobalFree(mem);
+		CloseClipboard();
+		return;
+	}
+	memcpy(data, text.c_str(), bytes);
+	GlobalUnlock(mem);
+	SetClipboardData(CF_UNICODETEXT, mem);
+	CloseClipboard();
+}
+
+void InLobbyMenu::_pasteFromClipboard()
+{
+	std::lock_guard<std::mutex> textLock(this->_textMutex);
+	if (!OpenClipboard(SokuLib::window)) {
+		playSound(0x29);
+		return;
+	}
+	HANDLE handle = GetClipboardData(CF_UNICODETEXT);
+	if (!handle) {
+		CloseClipboard();
+		playSound(0x29);
+		return;
+	}
+	wchar_t *data = static_cast<wchar_t *>(GlobalLock(handle));
+	if (!data) {
+		CloseClipboard();
+		playSound(0x29);
+		return;
+	}
+	std::wstring clip = data;
+	GlobalUnlock(handle);
+	CloseClipboard();
+
+	clip.erase(std::remove(clip.begin(), clip.end(), L'\r'), clip.end());
+	std::replace(clip.begin(), clip.end(), L'\n', L' ');
+	int realLen = this->_buffer.size() > 0 ? this->_buffer.size() - 1 : 0;
+	int selectionLen = this->_hasSelection() ? std::abs(this->_selectionEnd - this->_selectionStart) : 0;
+	int spaceLeft = CHAT_CHARACTER_LIMIT - (realLen - selectionLen);
+
+	if (spaceLeft <= 0 || clip.empty()) {
+		playSound(0x29);
+		return;
+	}
+	if (clip.size() > static_cast<size_t>(spaceLeft))
+		clip.resize(spaceLeft);
+	this->_deleteSelection();
+	this->_buffer.insert(this->_buffer.begin() + this->_textCursorPosIndex, clip.begin(), clip.end());
+	this->_updateTextCursor(this->_textCursorPosIndex + clip.size());
+	this->textChanged |= 1;
+	playSound(0x27);
 }
 
 void InLobbyMenu::_updateTextCursor(int pos)

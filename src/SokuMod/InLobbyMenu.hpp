@@ -143,6 +143,8 @@ private:
 	unsigned _currentPlatform = 0;
 	int _textCursorPosIndex = 0;
 	int _textCursorPosSize = 0;
+	int _selectionStart = -1;
+	int _selectionEnd = -1;
 	bool _editingText = false;
 	std::map<unsigned, int> _textSize;
 
@@ -151,6 +153,12 @@ private:
 	void _logChatToFile(unsigned player, const std::string &msg);
 	void _inputBoxUpdate();
 	void _initInputBox();
+	void _clearSelection();
+	bool _hasSelection() const;
+	bool _deleteSelection();
+	std::wstring _getSelectedText() const;
+	void _copySelectionToClipboard();
+	void _pasteFromClipboard();
 	void _updateTextCursor(int pos);
 	void _sendMessage(const std::wstring &msg);
 	void _unhook();
