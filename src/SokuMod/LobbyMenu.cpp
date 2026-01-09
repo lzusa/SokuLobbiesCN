@@ -201,6 +201,7 @@ LobbyMenu::~LobbyMenu()
 		s.write(&version, 1);
 		s.write((char *)&this->_loadedSettings.settings, sizeof(this->_loadedSettings.settings));
 		s.write((char *)&this->_loadedSettings.player, sizeof(this->_loadedSettings.player));
+		s.close();
 	} else {
 		auto err = strerror(errno);
 		auto str = new wchar_t[strlen(err)];
