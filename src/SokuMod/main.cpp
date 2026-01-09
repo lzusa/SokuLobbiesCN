@@ -4,6 +4,8 @@
 
 #include <sstream>
 #include <fstream>
+#include <memory>
+#include <vector>
 #include <SokuLib.hpp>
 #include <shlwapi.h>
 #include "data.hpp"
@@ -928,20 +930,19 @@ void loadSoku2Config()
 	int argc;
 	wchar_t app_path[MAX_PATH];
 	wchar_t setting_path[MAX_PATH];
-	wchar_t **arg_list = CommandLineToArgvW(GetCommandLineW(), &argc);
+	auto arg_list = std::unique_ptr<wchar_t *, decltype(&LocalFree)>(CommandLineToArgvW(GetCommandLineW(), &argc), LocalFree);
 
-	wcsncpy(app_path, arg_list[0], MAX_PATH);
+	if (!arg_list)
+		return;
+
+	wcsncpy(app_path, arg_list.get()[0], MAX_PATH);
 	PathRemoveFileSpecW(app_path);
 	if (GetEnvironmentVariableW(L"SWRSTOYS", setting_path, sizeof(setting_path)) <= 0) {
-		if (arg_list && argc > 1 && StrStrIW(arg_list[1], L"ini")) {
-			wcscpy(setting_path, arg_list[1]);
-			LocalFree(arg_list);
+		if (arg_list && argc > 1 && StrStrIW(arg_list.get()[1], L"ini")) {
+			wcscpy(setting_path, arg_list.get()[1]);
 		} else {
 			wcscpy(setting_path, app_path);
 			PathAppendW(setting_path, L"\\SWRSToys.ini");
-		}
-		if (arg_list) {
-			LocalFree(arg_list);
 		}
 	}
 	printf("Config file is %S\n", setting_path);
@@ -1028,28 +1029,20 @@ void getModVersionStr()
 	if (verSize == 0)
 		return;
 
-	auto verData = new char[verSize];
+	std::vector<char> verData(verSize);
 
-	if (!GetFileVersionInfoW(profilePath, verHandle, verSize, verData)) {
-		delete[] verData;
+	if (!GetFileVersionInfoW(profilePath, verHandle, verSize, verData.data()))
 		return;
-	}
 
-	if (!VerQueryValueA(verData, "\\", (void **)&lpBuffer, &size)) {
-		delete[] verData;
+	if (!VerQueryValueA(verData.data(), "\\", (void **)&lpBuffer, &size))
 		return;
-	}
-	if (!size) {
-		delete[] verData;
+	if (!size)
 		return;
-	}
 
 	auto verInfo = (VS_FIXEDFILEINFO *)lpBuffer;
 
-	if (verInfo->dwSignature != 0xFEEF04BD) {
-		delete[] verData;
+	if (verInfo->dwSignature != 0xFEEF04BD)
 		return;
-	}
 	sprintf_s(
 		modVersion,
 		"%d.%d.%d.%d",

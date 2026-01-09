@@ -124,6 +124,8 @@ SmallHostlist::~SmallHostlist()
 	this->_parent = nullptr;
 	if (this->_netThread.joinable())
 		this->_netThread.join();
+	if (this->_errorMsg)
+		free(this->_errorMsg);
 }
 
 #define CRenderer_Unknown1 ((void (__thiscall *)(int, int))0x404AF0)
