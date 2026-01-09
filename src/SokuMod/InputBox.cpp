@@ -90,6 +90,18 @@ void inputBoxUpdate()
 	if (!inputBoxShown)
 		return;
 
+	// Do not handle keyboard input while the game window is unfocused to avoid
+	// validating the dialog when Enter is pressed in another window.
+	if (GetForegroundWindow() != SokuLib::window) {
+		memset(current, 0, sizeof(current));
+		memset(timers, 0, sizeof(timers));
+		lastPressed = 0;
+		t = 0;
+		escPressed = false;
+		returnPressed = false;
+		return;
+	}
+
 	for (size_t i = 0; i < sizeof(current); i++) {
 		int j = GetAsyncKeyState(i);
 
