@@ -31,11 +31,21 @@ private:
 		SokuLib::Vector2i pos;
 		SokuLib::Vector2i offset;
 	};
+	struct LazyMessage {
+		const unsigned int channel;
+		const unsigned player;
+		const std::string msg;
+		LazyMessage(unsigned int channel, unsigned player, const std::string &msg) :
+			channel(channel),
+			player(player),
+			msg(msg) {
+
+		}
+	};
 	struct Message {
 		std::vector<MessageEmote> emotes;
 		std::list<MessageText> text;
-		bool farDown = false;
-		bool farUp = false;
+		std::optional<LazyMessage> lazy_message;
 	};
 	struct ArcadeMachine {
 		unsigned id;
@@ -128,14 +138,12 @@ private:
 	SokuLib::DrawUtils::Sprite _textSprite[2];
 	std::mutex _textMutex;
 	std::thread _hostThread;
-	unsigned _timers[256];
 	unsigned _textTimer = 0;
 	unsigned _lastPressed = 0;
 	unsigned _currentPlatform = 0;
 	int _textCursorPosIndex = 0;
 	int _textCursorPosSize = 0;
 	bool _editingText = false;
-	bool _returnPressed = false;
 	std::map<unsigned, int> _textSize;
 
 	void _updateMessageSprite(SokuLib::Vector2i pos, unsigned int remaining, SokuLib::Vector2i realSize, SokuLib::DrawUtils::Sprite &sprite, unsigned char alpha);
@@ -154,6 +162,8 @@ private:
 
 public:
 	char textChanged = 0;
+	std::mutex keyTimersMutex;
+	bool keysPressed[256] = {false};
 	HIMC immCtx = nullptr;
 	std::wstring immComposition;
 	bool hasDeadkey = false;
@@ -171,7 +181,6 @@ public:
 	void onKeyPressed(unsigned chr);
 	void onKeyReleased();
 	void addString(wchar_t *str, size_t size);
-	void onCompositionResult();
 
 	void updateChat(bool inGame);
 	void renderChat();

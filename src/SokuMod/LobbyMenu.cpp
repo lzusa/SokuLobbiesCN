@@ -71,6 +71,16 @@ LobbyMenu::Entry::Entry(const std::shared_ptr<Connection>& connection, const std
 	redirectIpForLocalServer = redirectIp;
 }
 
+void LobbyMenu::_refreshName() {
+	SokuLib::Vector2i size;
+	th123intl::ConvertCodePage(th123intl::GetTextCodePage(), (char *)SokuLib::profile1.name, CP_UTF8, this->_loadedSettings.name);
+	this->_playerName.texture = {};
+	this->_playerName.texture.createFromText(SokuLib::profile1.name, lobbyData->getFont(16), {200, 20}, &size);
+	this->_playerName.setSize(size.to<unsigned>());
+	this->_playerName.rect.width = size.x;
+	this->_playerName.rect.height = size.y;
+}
+
 LobbyMenu::LobbyMenu(SokuLib::MenuConnect *parent) :
 	_parent(parent)
 {
@@ -123,7 +133,7 @@ LobbyMenu::LobbyMenu(SokuLib::MenuConnect *parent) :
 		this->_loadedSettings.player.feet = 0;
 	}
 
-	th123intl::ConvertCodePage(th123intl::GetTextCodePage(), (char *)SokuLib::profile1.name, CP_UTF8, this->_loadedSettings.name);
+	_refreshName();
 	// For now, we get the stuff from the INI
 	this->_loadedSettings.settings.hostPref = static_cast<Lobbies::HostPreference>(hostPref);
 	this->_loadedSettings.pos.x = 20;
@@ -135,11 +145,6 @@ LobbyMenu::LobbyMenu(SokuLib::MenuConnect *parent) :
 	this->_version.setPosition({635 - size.x, 460 - size.y});
 	this->_version.rect.width = size.x;
 	this->_version.rect.height = size.y;
-
-	this->_playerName.texture.createFromText(SokuLib::profile1.name, lobbyData->getFont(16), {200, 20}, &size);
-	this->_playerName.setSize(size.to<unsigned>());
-	this->_playerName.rect.width = size.x;
-	this->_playerName.rect.height = size.y;
 
 	this->_customizeTexts[0].texture.createFromText("Avatar", lobbyData->getFont(20), {600, 74});
 	this->_customizeTexts[0].setSize(this->_customizeTexts[0].texture.getSize());
@@ -233,7 +238,7 @@ void LobbyMenu::_netLoop()
 
 		this->_connectionsMutex.lock();
 		for (auto &c : this->_connections)
-			if (c->c && !c->c->isInit() && c->c->isConnected())
+			if (c->c && c->c->hasConnected() && !c->c->isInit() && c->c->isConnected())
 				c->c->send(&ping, sizeof(ping));
 		this->_connectionsMutex.unlock();
 		for (int i = 0; i < 20 && this->_open; i++)
