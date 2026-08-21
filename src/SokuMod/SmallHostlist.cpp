@@ -17,6 +17,54 @@
 #define MAX_VISIBLE_ENTRIES 11
 #define modifyPos(x, y) ((SokuLib::Vector2i{static_cast<int>(x), static_cast<int>(y)} * this->_ratio + this->_pos).to<int>())
 
+static bool decodeCodePage(const std::string &input, unsigned codePage, DWORD flags, std::wstring &output)
+{
+	if (input.empty()) {
+		output.clear();
+		return true;
+	}
+	auto size = MultiByteToWideChar(codePage, flags, input.data(), static_cast<int>(input.size()), nullptr, 0);
+	if (!size)
+		return false;
+	output.resize(size);
+	if (!MultiByteToWideChar(codePage, flags, input.data(), static_cast<int>(input.size()), output.data(), size)) {
+		output.clear();
+		return false;
+	}
+	return true;
+}
+
+static std::wstring decodeHostlistName(const std::string &input, const std::string &country)
+{
+	std::wstring result;
+
+	// Hostlist JSON is UTF-8. Legacy clients may still publish names in their local code page.
+	if (decodeCodePage(input, CP_UTF8, MB_ERR_INVALID_CHARS, result))
+		return result;
+	if (country == "cn" && decodeCodePage(input, 936, 0, result))
+		return result;
+	if ((country == "tw" || country == "hk") && decodeCodePage(input, 950, 0, result))
+		return result;
+	if (decodeCodePage(input, 932, 0, result))
+		return result;
+	if (decodeCodePage(input, 936, 0, result))
+		return result;
+	return L"\uFFFD";
+}
+
+static std::wstring limitWideStr(const std::wstring &str, unsigned limit)
+{
+	if (str.size() <= limit)
+		return str;
+	if (limit <= 3)
+		return std::wstring(limit, L'.');
+
+	auto end = limit - 3;
+	if (end < str.size() && end > 0 && str[end - 1] >= 0xD800 && str[end - 1] <= 0xDBFF)
+		end--;
+	return str.substr(0, end) + L"...";
+}
+
 SmallHostlist::SmallHostlist(float ratio, SokuLib::Vector2i pos, SokuLib::MenuConnect *parent) :
 	_parent(parent),
 	_pos(pos),
@@ -365,8 +413,11 @@ void SmallHostlist::render()
 				this->_displaySokuCursor({266, static_cast<int>(118 + row * 16 / this->_ratio)}, {375, static_cast<unsigned>(16 / this->_ratio)});
 			if (!entry.names.texture.hasTexture()) {
 				SokuLib::Vector2i size;
+				int texId = 0;
 
-				entry.names.texture.createFromText(entry.namesStr.c_str(), lobbyData->getFont(12), {400, 20}, &size);
+				if (!createTextTexture(texId, entry.namesStr.c_str(), lobbyData->getFont(12), {400, 20}, &size))
+					puts("Error creating text texture");
+				entry.names.texture.setHandle(texId, {400, 20});
 				entry.names.setSize(size.to<unsigned>());
 				entry.names.rect.width = size.x;
 				entry.names.rect.height = size.y;
@@ -445,11 +496,12 @@ void SmallHostlist::_refreshHostlist()
 
 				auto entry = new PlayEntry();
 
-				entry->namesStr = limitStr(j["host_name"], 10) + "|" + limitStr(j["client_name"], 10);
 				entry->p1chr = j["host_character"];
 				entry->p2chr = j["client_character"];
 				entry->country1 = j["host_country"];
 				entry->country2 = j["client_country"];
+				entry->namesStr = limitWideStr(decodeHostlistName(j["host_name"].get<std::string>(), entry->country1), 10) +
+					L"|" + limitWideStr(decodeHostlistName(j["client_name"].get<std::string>(), entry->country2), 10);
 				entry->ip = j["ip"];
 				entry->port = std::stoul(entry->ip.substr(entry->ip.find_last_of(':') + 1));
 				entry->ip = entry->ip.substr(0, entry->ip.find_last_of(':'));

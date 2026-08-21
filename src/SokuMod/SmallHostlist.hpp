@@ -72,7 +72,7 @@ private:
 	};
 
 	struct PlayEntry {
-		std::string namesStr;
+		std::wstring namesStr;
 		SokuLib::DrawUtils::Sprite names;
 		std::string p1chr;
 		std::string p2chr;
