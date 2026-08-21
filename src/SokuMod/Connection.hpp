@@ -83,6 +83,7 @@ public:
 	std::function<void (const std::string &msg)> onImpMsg;
 	std::function<void (const std::string &msg)> onError;
 	std::function<void (const Player &)> onPlayerJoin;
+	std::function<void (const Player &)> onPlayerLeave;
 	std::function<unsigned short ()> onHostRequest;
 	std::function<void ()> onDisconnect;
 	std::mutex meMutex;

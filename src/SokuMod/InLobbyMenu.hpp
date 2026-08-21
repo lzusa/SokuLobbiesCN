@@ -9,6 +9,7 @@
 #include <mutex>
 #include <thread>
 #include <queue>
+#include <chrono>
 #include <Socket.hpp>
 #include <SokuLib.hpp>
 #include "Connection.hpp"
@@ -35,10 +36,12 @@ private:
 		const unsigned int channel;
 		const unsigned player;
 		const std::string msg;
-		LazyMessage(unsigned int channel, unsigned player, const std::string &msg) :
+		const std::optional<unsigned> colorOverride;
+		LazyMessage(unsigned int channel, unsigned player, const std::string &msg, std::optional<unsigned> colorOverride) :
 			channel(channel),
 			player(player),
-			msg(msg) {
+			msg(msg),
+			colorOverride(colorOverride) {
 
 		}
 	};
@@ -89,6 +92,7 @@ private:
 	std::function<void (const std::string &msg)> onImpMsg;
 	std::function<void (int32_t channel, int32_t player, const std::string &msg)> onMsg;
 	std::function<void (const Player &)> onPlayerJoin;
+	std::function<void (const Player &)> onPlayerLeave;
 	std::function<unsigned short ()> onHostRequest;
 	std::function<void (const Lobbies::PacketOlleh &)> onConnect;
 	std::function<void (const Player &, uint32_t id)> onArcadeEngage;
@@ -119,6 +123,15 @@ private:
 	SokuLib::DrawUtils::Sprite _battleStatus[3];
 	std::list<Message> _chatMessages;
 	std::mutex _chatMessagesMutex;
+	struct RecentOpponent {
+		uint32_t playerId;
+		std::string playerName;
+		uint32_t machineId;
+		bool matchActive = true;
+		std::chrono::steady_clock::time_point expiresAt;
+	};
+	std::optional<RecentOpponent> _recentOpponent;
+	std::mutex _recentOpponentMutex;
 	std::map<uint32_t, PlayerData> _extraPlayerData;
 	std::wstring _buffer;
 	std::vector<ArcadeMachine> _machines;
@@ -149,7 +162,9 @@ private:
 	std::map<unsigned, int> _textSize;
 
 	void _updateMessageSprite(SokuLib::Vector2i pos, unsigned int remaining, SokuLib::Vector2i realSize, SokuLib::DrawUtils::Sprite &sprite, unsigned char alpha);
-	void _addMessageToList(unsigned channel, unsigned player, const std::string &msg);
+	void _addMessageToList(unsigned channel, unsigned player, const std::string &msg, std::optional<unsigned> colorOverride = std::nullopt);
+	void _updateRecentOpponent();
+	void _clearRecentOpponent();
 	void _logChatToFile(unsigned player, const std::string &msg);
 	void _inputBoxUpdate();
 	void _initInputBox();

@@ -276,7 +276,12 @@ bool Connection::_handlePacket(const Lobbies::PacketPlayerLeave &packet, size_t 
 	size -= sizeof(packet);
 	if (packet.id == this->_me->id)
 		return this->error("Protocol error: Server sent OPCODE_PLAYER_LEAVE with self id"), false;
-	this->_players.erase(this->_players.find(packet.id));
+	auto it = this->_players.find(packet.id);
+	if (it == this->_players.end())
+		return true;
+	if (this->onPlayerLeave)
+		this->onPlayerLeave(it->second);
+	this->_players.erase(it);
 	return true;
 }
 

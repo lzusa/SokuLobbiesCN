@@ -35,6 +35,7 @@
 #define ELEVEATOR_CTR_DIVIDER 90.f
 
 #define DEBUG_COLOR 0x404040
+#define OPPONENT_CHAT_COLOR 0xFF80C0
 
 struct CDesignSprite {
 	void *vftable; // =008576ac
@@ -352,6 +353,8 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 	this->onMsg = this->_connection->onMsg;
 	this->onHostRequest = this->_connection->onHostRequest;
 	this->onConnect = this->_connection->onConnect;
+	this->onPlayerJoin = this->_connection->onPlayerJoin;
+	this->onPlayerLeave = this->_connection->onPlayerLeave;
 	this->_connection->onDisconnect = [this]{
 		this->_disconnected = true;
 	};
@@ -365,6 +368,11 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		this->_extraPlayerData[r.id].name.setSize(size.to<unsigned>());
 		this->_extraPlayerData[r.id].name.rect.width = size.x;
 		this->_extraPlayerData[r.id].name.rect.height = size.y;
+	};
+	this->_connection->onPlayerLeave = [this](const Player &r){
+		std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
+		if (this->_recentOpponent && this->_recentOpponent->playerId == r.id)
+			this->_recentOpponent.reset();
 	};
 	this->_connection->onConnect = [this](const Lobbies::PacketOlleh &r){
 		auto &bg = lobbyData->backgrounds[r.bg];
@@ -439,7 +447,28 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 	this->_connection->onMsg = [this](int32_t channel, int32_t player, const std::string &msg){
 		playSound(49);
 		this->_logChatToFile(player, msg);
-		this->_addMessageToList(channel, player, msg);
+		std::optional<unsigned> colorOverride;
+		bool opponentDisconnected = false;
+		{
+			std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
+			if (this->_recentOpponent) {
+				auto now = std::chrono::steady_clock::now();
+				bool highlighted = this->_recentOpponent->matchActive || now < this->_recentOpponent->expiresAt;
+				if (highlighted && player == this->_recentOpponent->playerId)
+					colorOverride = OPPONENT_CHAT_COLOR;
+				if (player == 0) {
+					auto disconnectPrefix = this->_recentOpponent->playerName + " has disconnected";
+					auto kickedPrefix = this->_recentOpponent->playerName + " has been kicked:";
+					opponentDisconnected = msg.compare(0, disconnectPrefix.size(), disconnectPrefix) == 0 ||
+						msg.compare(0, kickedPrefix.size(), kickedPrefix) == 0;
+					if (highlighted && opponentDisconnected)
+						colorOverride = OPPONENT_CHAT_COLOR;
+				}
+			}
+		}
+		this->_addMessageToList(channel, player, msg, colorOverride);
+		if (opponentDisconnected)
+			this->_clearRecentOpponent();
 	};
 	this->_connection->onConnectRequest = [this](const std::string &ip, unsigned short port, bool spectate){
 		printf("onConnectRequest %s %u %s\n", ip.c_str(), port, spectate ? "true" : "false");
@@ -670,6 +699,7 @@ int InLobbyMenu::onProcess()
 			return true;
 		}
 		this->updateChat(false);
+		this->_updateRecentOpponent();
 		if (this->_parent->choice > 0) {
 			if (this->_parent->subchoice == 5) { //Already Playing
 				this->_parent->notSpectateFlag = !this->_parent->notSpectateFlag;
@@ -1529,16 +1559,79 @@ void InLobbyMenu::_unhook()
 	this->_connection->onHostRequest = this->onHostRequest;
 	this->_connection->onConnect = this->onConnect;
 	this->_connection->onPlayerJoin = this->onPlayerJoin;
+	this->_connection->onPlayerLeave = this->onPlayerLeave;
 	this->_connection->onArcadeEngage = this->onArcadeEngage;
 	this->_connection->onArcadeLeave = this->onArcadeLeave;
 }
 
-void InLobbyMenu::_addMessageToList(unsigned int channel, unsigned player, const std::string &msg)
+void InLobbyMenu::_addMessageToList(unsigned int channel, unsigned player, const std::string &msg, std::optional<unsigned> colorOverride)
 {
 	this->_chatTimer = 900;
 	std::lock_guard<std::mutex> lock(this->_chatMessagesMutex);
 	this->_chatMessages.emplace_front();
-	this->_chatMessages.front().lazy_message.emplace(channel, player, msg);
+	this->_chatMessages.front().lazy_message.emplace(channel, player, msg, colorOverride);
+}
+
+void InLobbyMenu::_clearRecentOpponent()
+{
+	std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
+	this->_recentOpponent.reset();
+}
+
+void InLobbyMenu::_updateRecentOpponent()
+{
+	auto me = this->_connection->getMe();
+	if (!me)
+		return;
+	auto players = this->_connection->getPlayers();
+	auto now = std::chrono::steady_clock::now();
+	auto machineId = this->_currentMachine ? this->_currentMachine->id : me->machineId;
+	std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
+
+	if (this->_recentOpponent) {
+		if (!this->_recentOpponent->matchActive) {
+			if (me->battleStatus == Lobbies::BATTLE_STATUS_PLAYING) {
+				auto opponent = std::find_if(players.begin(), players.end(), [me, machineId](const Player &p){
+					return p.id != me->id && p.machineId == machineId && p.battleStatus == Lobbies::BATTLE_STATUS_PLAYING;
+				});
+				if (opponent != players.end()) {
+					this->_recentOpponent = RecentOpponent{opponent->id, opponent->name, opponent->machineId};
+					return;
+				}
+			}
+			if (now >= this->_recentOpponent->expiresAt)
+				this->_recentOpponent.reset();
+			return;
+		}
+
+		auto opponent = std::find_if(players.begin(), players.end(), [this](const Player &p){
+			return p.id == this->_recentOpponent->playerId;
+		});
+		if (
+			me->battleStatus != Lobbies::BATTLE_STATUS_PLAYING ||
+			opponent == players.end() ||
+			opponent->battleStatus != Lobbies::BATTLE_STATUS_PLAYING ||
+			machineId != this->_recentOpponent->machineId ||
+			opponent->machineId != this->_recentOpponent->machineId
+		) {
+			this->_recentOpponent->matchActive = false;
+			this->_recentOpponent->expiresAt = now + std::chrono::minutes(5);
+		}
+		return;
+	}
+
+	if (me->battleStatus != Lobbies::BATTLE_STATUS_PLAYING)
+		return;
+	for (const auto &player : players) {
+		if (
+			player.id != me->id &&
+			player.machineId == machineId &&
+			player.battleStatus == Lobbies::BATTLE_STATUS_PLAYING
+		) {
+			this->_recentOpponent = RecentOpponent{player.id, player.name, player.machineId};
+			return;
+		}
+	}
 }
 
 void InLobbyMenu::_logChatToFile(unsigned player, const std::string &msg)
@@ -2095,7 +2188,9 @@ void InLobbyMenu::renderChat()
 					auto &txt = m->text.back();
 					int texId = 0;
 
-					if (msg.lazy_message->player == 0)
+					if (msg.lazy_message->colorOverride)
+						txt.sprite.tint = *msg.lazy_message->colorOverride;
+					else if (msg.lazy_message->player == 0)
 						txt.sprite.tint = msg.lazy_message->channel;
 					//txt.sprite.texture.createFromText(line.c_str(), this->_chatFont, {350, 300}, &txt.realSize);
 					if (!createTextTexture(texId, convertEncoding<char, wchar_t, UTF8Decode, UTF16Encode>(line).c_str(), this->_chatFont, {350, 300}, &txt.realSize))
