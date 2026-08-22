@@ -144,6 +144,8 @@ static LRESULT __stdcall Hooked_WndProc(const HWND hWnd, UINT uMsg, WPARAM wPara
 				ptrMutex.unlock();
 				return CallWindowProc(Original_WndProc, hWnd, uMsg, wParam, lParam);
 			}
+			if (activeMenu->immCtx)
+				ImmReleaseContext(hWnd, activeMenu->immCtx);
 			activeMenu->immCtx = nullptr;
 			activeMenu->immComposition.clear();
 			activeMenu->compositionCursor = 0;
@@ -182,7 +184,8 @@ static LRESULT __stdcall Hooked_WndProc(const HWND hWnd, UINT uMsg, WPARAM wPara
 			ptrMutex.unlock();
 			return CallWindowProc(Original_WndProc, hWnd, uMsg, wParam, lParam);
 		}
-		ImmReleaseContext(SokuLib::window, activeMenu->immCtx);
+		if (activeMenu->immCtx)
+			ImmReleaseContext(hWnd, activeMenu->immCtx);
 		activeMenu->immCtx = nullptr;
 		activeMenu->immComposition.clear();
 		activeMenu->compositionCursor = 0;
@@ -198,56 +201,77 @@ static LRESULT __stdcall Hooked_WndProc(const HWND hWnd, UINT uMsg, WPARAM wPara
 		if (wineVersion && activeMenu->immCtx == nullptr)
 			activeMenu->wineWorkaroundNeeded = true;
 		if (activeMenu->wineWorkaroundNeeded)
-			activeMenu->immCtx = ImmGetContext(SokuLib::window);
+			activeMenu->immCtx = ImmGetContext(hWnd);
+		if (!activeMenu->immCtx)
+			activeMenu->immCtx = ImmGetContext(hWnd);
+		if (!activeMenu->immCtx) {
+			ptrMutex.unlock();
+			return CallWindowProc(Original_WndProc, hWnd, uMsg, wParam, lParam);
+		}
 
 		activeMenu->onKeyReleased();
 		if (lParam & GCS_RESULTSTR) {
-			auto required = ImmGetCompositionStringW(activeMenu->immCtx, GCS_RESULTSTR, nullptr, 0);
-			auto immStr = (wchar_t *)malloc(required);
-			bool v = false;
+			LONG required = ImmGetCompositionStringW(activeMenu->immCtx, GCS_RESULTSTR, nullptr, 0);
 
-			assert(required % 2 == 0);
-			ImmGetCompositionStringW(activeMenu->immCtx, GCS_RESULTSTR, immStr, required);
-			activeMenu->addString(immStr, required / 2);
-			free(immStr);
+			if (required > 0 && required % sizeof(wchar_t) == 0) {
+				std::vector<wchar_t> result(required / sizeof(wchar_t));
+				LONG copied = ImmGetCompositionStringW(activeMenu->immCtx, GCS_RESULTSTR, result.data(), required);
+
+				if (copied > 0 && copied <= required && copied % sizeof(wchar_t) == 0)
+					activeMenu->addString(result.data(), copied / sizeof(wchar_t));
+			}
 			activeMenu->immComposition.clear();
 			activeMenu->textChanged |= 3;
 		}
 		//required = ImmGetCompositionStringW(activeMenu->immCtx, GCS_COMPATTR, nullptr, 0);
 		//printf("GCS_COMPATTR: Required %li\n", required);
 		if (lParam & GCS_COMPSTR) {
-			auto required = ImmGetCompositionStringW(activeMenu->immCtx, GCS_COMPSTR, nullptr, 0);
+			LONG required = ImmGetCompositionStringW(activeMenu->immCtx, GCS_COMPSTR, nullptr, 0);
 
-			activeMenu->immComposition.resize(required);
-			ImmGetCompositionStringW(
-				activeMenu->immCtx,
-				GCS_COMPSTR,
-				activeMenu->immComposition.data(),
-				activeMenu->immComposition.size() * sizeof(*activeMenu->immComposition.data())
-			);
+			activeMenu->immComposition.clear();
+			if (required > 0 && required % sizeof(wchar_t) == 0) {
+				activeMenu->immComposition.resize(required / sizeof(wchar_t));
+				LONG copied = ImmGetCompositionStringW(
+					activeMenu->immCtx,
+					GCS_COMPSTR,
+					activeMenu->immComposition.data(),
+					required
+				);
+				if (copied < 0 || copied > required || copied % sizeof(wchar_t) != 0)
+					activeMenu->immComposition.clear();
+				else
+					activeMenu->immComposition.resize(copied / sizeof(wchar_t));
+			}
 			activeMenu->textChanged |= 2;
 		}
 		if (lParam & GCS_CURSORPOS) {
-			activeMenu->compositionCursor = ImmGetCompositionStringW(
+			LONG cursor = ImmGetCompositionStringW(
 				activeMenu->immCtx,
 				GCS_CURSORPOS,
 				nullptr,
 				0
 			);
+			activeMenu->compositionCursor = cursor < 0 ? 0 : cursor;
 			activeMenu->textChanged |= 4;
 		}
 	} else if (uMsg == WM_KEYDOWN) {
 		BYTE keyboardState[256];
-		wchar_t old[2];
-
-		memcpy(old, activeMenu->keyBuffer, sizeof(old));
 		GetKeyboardState(keyboardState);
-		activeMenu->keyBufferUsed = ToUnicode((UINT)wParam, lParam, keyboardState, activeMenu->keyBuffer, 2, 0);
+		activeMenu->keyBufferUsed = ToUnicode(
+			static_cast<UINT>(wParam),
+			static_cast<UINT>((lParam >> 16) & 0xFF),
+			keyboardState,
+			activeMenu->keyBuffer,
+			2,
+			0
+		);
 
-		auto key = MapVirtualKey(wParam, MAPVK_VK_TO_CHAR);
+		if (activeMenu->keyBufferUsed > 0) {
+			auto decoded = UTF16Decode(std::wstring(activeMenu->keyBuffer, activeMenu->keyBuffer + activeMenu->keyBufferUsed));
 
-		if (activeMenu->keyBufferUsed > 0)
-			activeMenu->onKeyPressed(UTF16Decode(std::wstring(activeMenu->keyBuffer, activeMenu->keyBuffer + activeMenu->keyBufferUsed))[0]);
+			if (!decoded.empty())
+				activeMenu->onKeyPressed(decoded[0]);
+		}
 		if (wParam < sizeof(activeMenu->keysPressed) / sizeof(*activeMenu->keysPressed)) {
 			std::lock_guard<std::mutex> lock_(activeMenu->keyTimersMutex);
 			activeMenu->keysPressed[wParam] = true;
@@ -2157,7 +2181,7 @@ void InLobbyMenu::onKeyPressed(unsigned chr)
 
 		if (result.size() + this->_buffer.size() <= CHAT_CHARACTER_LIMIT) {
 			this->_buffer.insert(this->_buffer.begin() + this->_textCursorPosIndex, result.begin(), result.end());
-			this->_updateTextCursor(this->_textCursorPosIndex + 1);
+			this->_updateTextCursor(this->_textCursorPosIndex + result.size());
 			this->textChanged |= 1;
 			playSound(0x27);
 		} else
@@ -2179,7 +2203,7 @@ void InLobbyMenu::onKeyReleased()
 
 		if (result.size() + this->_buffer.size() <= CHAT_CHARACTER_LIMIT) {
 			this->_buffer.insert(this->_buffer.begin() + this->_textCursorPosIndex, result.begin(), result.end());
-			this->_updateTextCursor(this->_textCursorPosIndex + 1);
+			this->_updateTextCursor(this->_textCursorPosIndex + result.size());
 			playSound(0x27);
 			this->textChanged |= 1;
 		} else
@@ -2304,8 +2328,15 @@ void InLobbyMenu::_inputBoxUpdate()
 			if (this->_deleteSelection()) {
 				playSound(0x27);
 			} else if (this->_textCursorPosIndex != 0) {
-				this->_buffer.erase(this->_buffer.begin() + this->_textCursorPosIndex - 1);
-				this->_updateTextCursor(this->_textCursorPosIndex - 1);
+				size_t eraseStart = this->_textCursorPosIndex - 1;
+				size_t eraseCount = 1;
+
+				if (eraseStart && IS_LOW_SURROGATE(this->_buffer[eraseStart]) && IS_HIGH_SURROGATE(this->_buffer[eraseStart - 1])) {
+					eraseStart--;
+					eraseCount++;
+				}
+				this->_buffer.erase(eraseStart, eraseCount);
+				this->_updateTextCursor(eraseStart);
 				this->textChanged |= 1;
 				playSound(0x27);
 			}
@@ -2314,7 +2345,15 @@ void InLobbyMenu::_inputBoxUpdate()
 			if (this->_deleteSelection()) {
 				playSound(0x27);
 			} else if (this->_textCursorPosIndex < this->_buffer.size() - 1) {
-				this->_buffer.erase(this->_buffer.begin() + this->_textCursorPosIndex);
+				size_t eraseCount = 1;
+
+				if (
+					IS_HIGH_SURROGATE(this->_buffer[this->_textCursorPosIndex]) &&
+					this->_textCursorPosIndex + 1 < this->_buffer.size() - 1 &&
+					IS_LOW_SURROGATE(this->_buffer[this->_textCursorPosIndex + 1])
+				)
+					eraseCount++;
+				this->_buffer.erase(this->_textCursorPosIndex, eraseCount);
 				playSound(0x27);
 				this->textChanged |= 1;
 			}
@@ -2325,7 +2364,11 @@ void InLobbyMenu::_inputBoxUpdate()
 				this->_clearSelection();
 				playSound(0x27);
 			} else if (this->_textCursorPosIndex != 0) {
-				this->_updateTextCursor(this->_textCursorPosIndex - 1);
+				size_t newPosition = this->_textCursorPosIndex - 1;
+
+				if (newPosition && IS_LOW_SURROGATE(this->_buffer[newPosition]) && IS_HIGH_SURROGATE(this->_buffer[newPosition - 1]))
+					newPosition--;
+				this->_updateTextCursor(newPosition);
 				playSound(0x27);
 			}
 		}
@@ -2335,7 +2378,15 @@ void InLobbyMenu::_inputBoxUpdate()
 				this->_clearSelection();
 				playSound(0x27);
 			} else if (this->_textCursorPosIndex != this->_buffer.size() - 1) {
-				this->_updateTextCursor(this->_textCursorPosIndex + 1);
+				size_t newPosition = this->_textCursorPosIndex + 1;
+
+				if (
+					IS_HIGH_SURROGATE(this->_buffer[this->_textCursorPosIndex]) &&
+					newPosition < this->_buffer.size() - 1 &&
+					IS_LOW_SURROGATE(this->_buffer[newPosition])
+				)
+					newPosition++;
+				this->_updateTextCursor(newPosition);
 				playSound(0x27);
 			}
 		}
@@ -2349,7 +2400,7 @@ void InLobbyMenu::_inputBoxUpdate()
 					this->_deleteSelection();
 				if (result.size() + this->_buffer.size() <= CHAT_CHARACTER_LIMIT) {
 					this->_buffer.insert(this->_buffer.begin() + this->_textCursorPosIndex, result.begin(), result.end());
-					this->_updateTextCursor(this->_textCursorPosIndex + 1);
+					this->_updateTextCursor(this->_textCursorPosIndex + result.size());
 					playSound(0x27);
 					this->textChanged |= 1;
 				} else
@@ -2569,7 +2620,8 @@ void InLobbyMenu::_initInputBox()
 	candidate.dwIndex = 0;
 	candidate.dwStyle = CFS_CANDIDATEPOS;
 	candidate.ptCurrentPos = result;
-	ImmSetCandidateWindow(this->immCtx, &candidate);
+	if (this->immCtx)
+		ImmSetCandidateWindow(this->immCtx, &candidate);
 }
 
 void InLobbyMenu::_clearSelection()
@@ -2692,7 +2744,7 @@ void InLobbyMenu::_pasteFromClipboard()
 	std::replace(clip.begin(), clip.end(), L'\n', L' ');
 	int realLen = this->_buffer.size() > 0 ? this->_buffer.size() - 1 : 0;
 	int selectionLen = this->_hasSelection() ? std::abs(this->_selectionEnd - this->_selectionStart) : 0;
-	int spaceLeft = CHAT_CHARACTER_LIMIT - (realLen - selectionLen);
+	int spaceLeft = CHAT_CHARACTER_LIMIT - 1 - (realLen - selectionLen);
 
 	if (spaceLeft <= 0 || clip.empty()) {
 		playSound(0x29);
@@ -2709,8 +2761,8 @@ void InLobbyMenu::_pasteFromClipboard()
 
 void InLobbyMenu::_updateTextCursor(int pos)
 {
-	if (pos > CHAT_CHARACTER_LIMIT)
-		pos = CHAT_CHARACTER_LIMIT;
+	if (pos >= CHAT_CHARACTER_LIMIT)
+		pos = CHAT_CHARACTER_LIMIT - 1;
 
 	int computedSize = getTextSize(this->_buffer.substr(0, pos).c_str(), this->_chatFont, BOX_TEXTURE_SIZE).x;
 	int newX = this->_textCursor.getPosition().x + computedSize - this->_textCursorPosSize;
@@ -2745,7 +2797,8 @@ void InLobbyMenu::_updateTextCursor(int pos)
 	candidate.dwIndex = 0;
 	candidate.dwStyle = CFS_CANDIDATEPOS;
 	candidate.ptCurrentPos = result;
-	ImmSetCandidateWindow(this->immCtx, &candidate);
+	if (this->immCtx)
+		ImmSetCandidateWindow(this->immCtx, &candidate);
 }
 
 void InLobbyMenu::_sendMessage(const std::wstring &msg)
@@ -3390,14 +3443,19 @@ void InLobbyMenu::_startHosting()
 void InLobbyMenu::addString(wchar_t *str, size_t size)
 {
 	this->_textMutex.lock();
+	const size_t contentSize = this->_buffer.empty() ? 0 : this->_buffer.size() - 1;
+	const size_t available = contentSize < CHAT_CHARACTER_LIMIT - 1 ? CHAT_CHARACTER_LIMIT - 1 - contentSize : 0;
 
-	std::wstring result{str, str + size};
-	auto base = UTF16Decode(result);
-
+	size = (std::min)(size, available);
+	if (size && IS_HIGH_SURROGATE(str[size - 1]))
+		size--;
+	if (!size) {
+		playSound(0x29);
+		this->_textMutex.unlock();
+		return;
+	}
 	this->_buffer.insert(this->_buffer.begin() + this->_textCursorPosIndex, str, str + size);
-	if (this->_buffer.size() > CHAT_CHARACTER_LIMIT)
-		this->_buffer.resize(CHAT_CHARACTER_LIMIT);
-	this->_updateTextCursor(this->_textCursorPosIndex + base.size());
+	this->_updateTextCursor(this->_textCursorPosIndex + size);
 	this->textChanged |= 1;
 	playSound(0x27);
 	this->_textMutex.unlock();
@@ -3405,31 +3463,22 @@ void InLobbyMenu::addString(wchar_t *str, size_t size)
 
 void InLobbyMenu::_updateCompositionSprite()
 {
-	auto cb = [this]{
-		int ret;
+	if (this->textChanged & 1) {
+		int ret = 0;
+		SokuLib::Vector2i textureSize = BOX_TEXTURE_SIZE;
+		D3DCAPS9 caps{};
+		const int visibleWidth = this->_textSprite[0].rect.width;
+		const int textWidth = getTextSize(this->_buffer.data(), this->_chatFont, BOX_TEXTURE_SIZE).x;
 
-		if (this->textChanged & 1) {
-			if (!createTextTexture(ret, this->_buffer.data(), this->_chatFont, BOX_TEXTURE_SIZE, nullptr))
-				puts("Error creating text texture");
-			this->_textSprite[0].texture.setHandle(ret, BOX_TEXTURE_SIZE);
-		}
-		this->textChanged = false;	
-	};
-
-	if (
-		(SokuLib::mainMode == SokuLib::BATTLE_MODE_VSSERVER || SokuLib::mainMode == SokuLib::BATTLE_MODE_VSCLIENT) &&
-		(
-			SokuLib::sceneId == SokuLib::SCENE_BATTLE ||
-			SokuLib::sceneId == SokuLib::SCENE_BATTLECL ||
-			SokuLib::sceneId == SokuLib::SCENE_BATTLESV ||
-			SokuLib::newSceneId == SokuLib::SCENE_BATTLE ||
-			SokuLib::newSceneId == SokuLib::SCENE_BATTLECL ||
-			SokuLib::newSceneId == SokuLib::SCENE_BATTLESV
-		)
-	)
-		std::thread{cb}.join();
-	else
-		cb();
+		if (SokuLib::pd3dDev && SUCCEEDED(SokuLib::pd3dDev->GetDeviceCaps(&caps)))
+			textureSize.x = (std::min)(textureSize.x, static_cast<int>(caps.MaxTextureWidth));
+		textureSize.x = (std::min)(textureSize.x, (std::max)(visibleWidth, textWidth + 8));
+		if (createTextTexture(ret, this->_buffer.data(), this->_chatFont, textureSize, nullptr))
+			this->_textSprite[0].texture.setHandle(ret, textureSize.to<unsigned>());
+		else
+			puts("Error creating text texture");
+	}
+	this->textChanged = false;
 }
 
 int InLobbyMenu::_getTextSize(unsigned int i)
