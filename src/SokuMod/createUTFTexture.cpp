@@ -131,13 +131,13 @@ static void __fastcall repl_alphaBlend(unsigned int color, unsigned int alpha, u
 	*out = result;
 }
 
-static void __fastcall repl_textShadow(int height, int width, int lineSize, unsigned int* input, unsigned int* output) {
+static void __fastcall repl_textShadow(int height, int width, int inputLineSize, int outputLineSize, unsigned int* input, unsigned int* output) {
 	width -= 1;
 	height -= 1;
 
 	for (int j = 1; j < height; ++j) {
 		for (int i = 1; i < width; ++i) {
-			unsigned int c0 = input[j * lineSize + i];
+			unsigned int c0 = input[j * inputLineSize + i];
 
 			if (c0 >> 24) {
 				unsigned alpha = c0 >> 27;
@@ -146,40 +146,54 @@ static void __fastcall repl_textShadow(int height, int width, int lineSize, unsi
 				if (alpha > 16)
 					alpha = 16;
 				repl_alphaBlend(c0, alpha, &c1);
-				repl_alphaBlend(c1, 16, &output[j * lineSize + i]);
+				repl_alphaBlend(c1, 16, &output[j * outputLineSize + i]);
 			} else {
-				unsigned char current = input[(j - 1) * lineSize + i] >> 24;
-				unsigned char next = input[(j + 1) * lineSize + i] >> 24;
+				unsigned char current = input[(j - 1) * inputLineSize + i] >> 24;
+				unsigned char next = input[(j + 1) * inputLineSize + i] >> 24;
 
 				if (current < next)
 					current = next;
-				next = input[j * lineSize + (i - 1)] >> 24;
+				next = input[j * inputLineSize + (i - 1)] >> 24;
 				if (current < next)
 					current = next;
-				next = input[j * lineSize + (i + 1)] >> 24;
+				next = input[j * inputLineSize + (i + 1)] >> 24;
 				if (current < next)
 					current = next;
-				repl_alphaBlend(0, current >> 4, &output[j * lineSize + i]);
+				repl_alphaBlend(0, current >> 4, &output[j * outputLineSize + i]);
 			}
 		}
 	}
+}
+
+static bool isD3D9ExDevice()
+{
+	IDirect3DDevice9Ex *deviceEx = nullptr;
+	auto result = SokuLib::pd3dDev->QueryInterface(__uuidof(IDirect3DDevice9Ex), reinterpret_cast<void **>(&deviceEx));
+
+	if (SUCCEEDED(result))
+		deviceEx->Release();
+	return SUCCEEDED(result);
 }
 
 bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, SokuLib::Vector2i texsize, SokuLib::Vector2i *size, bool sharp)
 {
 	auto strSize = wcslen(text);
 	LPDIRECT3DTEXTURE9 *texPtr = SokuLib::textureMgr.allocate(&retId);
-	LPDIRECT3DTEXTURE9 texPtr2;
+	LPDIRECT3DTEXTURE9 texPtr2 = nullptr;
+	LPDIRECT3DTEXTURE9 uploadTexture = nullptr;
+	LPDIRECT3DTEXTURE9 outputTexture = nullptr;
 	LPDIRECT3DSURFACE9 surface;
 	D3DLOCKED_RECT r1;
 	D3DLOCKED_RECT r2;
 	HRESULT ret;
 	HDC context;
 	SIZE actualSize;
+	bool d3d9Ex = isD3D9ExDevice();
+	auto cpuPool = d3d9Ex ? D3DPOOL_SYSTEMMEM : D3DPOOL_MANAGED;
 
 	*texPtr = nullptr;
 	EnterCriticalSection((LPCRITICAL_SECTION)0x8a0e14);
-	ret = D3DXCreateTexture(SokuLib::pd3dDev, texsize.x, texsize.y, 1, 0, D3DFMT_X8R8G8B8, D3DPOOL_MANAGED, &texPtr2);
+	ret = D3DXCreateTexture(SokuLib::pd3dDev, texsize.x, texsize.y, 1, 0, D3DFMT_X8R8G8B8, cpuPool, &texPtr2);
 	LeaveCriticalSection((LPCRITICAL_SECTION)0x8a0e14);
 	if (D3D_OK != ret) {
 		puts("Error in D3DXCreateTexture XRGB");
@@ -188,10 +202,23 @@ bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, 
 	}
 
 	EnterCriticalSection((LPCRITICAL_SECTION)0x8a0e14);
-	ret = D3DXCreateTexture(SokuLib::pd3dDev, texsize.x, texsize.y, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, texPtr);
+	if (d3d9Ex) {
+		ret = D3DXCreateTexture(SokuLib::pd3dDev, texsize.x, texsize.y, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &uploadTexture);
+		if (SUCCEEDED(ret))
+			ret = D3DXCreateTexture(SokuLib::pd3dDev, texsize.x, texsize.y, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, texPtr);
+		outputTexture = uploadTexture;
+	} else {
+		ret = D3DXCreateTexture(SokuLib::pd3dDev, texsize.x, texsize.y, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, texPtr);
+		outputTexture = *texPtr;
+	}
 	LeaveCriticalSection((LPCRITICAL_SECTION)0x8a0e14);
 	if (D3D_OK != ret) {
 		puts("Error in D3DXCreateTexture ARGB");
+		if (uploadTexture)
+			uploadTexture->Release();
+		if (*texPtr)
+			(*texPtr)->Release();
+		*texPtr = nullptr;
 		texPtr2->Release();
 		SokuLib::textureMgr.deallocate(retId);
 		return false;
@@ -200,6 +227,8 @@ bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, 
 	if (D3D_OK != texPtr2->GetSurfaceLevel(0, &surface)) {
 		puts("Error in GetSurfaceLevel");
 		texPtr2->Release();
+		if (uploadTexture)
+			uploadTexture->Release();
 		SokuLib::textureMgr.remove(retId);
 		return false;
 	}
@@ -208,10 +237,13 @@ bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, 
 		puts("Error in GetDC");
 		surface->Release();
 		texPtr2->Release();
+		if (uploadTexture)
+			uploadTexture->Release();
 		SokuLib::textureMgr.remove(retId);
 		return false;
 	}
 
+	PatBlt(context, 0, 0, texsize.x, texsize.y, BLACKNESS);
 	font.maxWidth = texsize.x;
 	font.maxHeight = texsize.y;
 	setFont(context, font, sharp);
@@ -223,6 +255,8 @@ bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, 
 		surface->ReleaseDC(context);
 		surface->Release();
 		texPtr2->Release();
+		if (uploadTexture)
+			uploadTexture->Release();
 		SokuLib::textureMgr.remove(retId);
 		return false;
 	}
@@ -234,6 +268,8 @@ bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, 
 			surface->ReleaseDC(context);
 			surface->Release();
 			texPtr2->Release();
+			if (uploadTexture)
+				uploadTexture->Release();
 			SokuLib::textureMgr.remove(retId);
 			return false;
 		}
@@ -245,37 +281,57 @@ bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, 
 	surface->ReleaseDC(context);
 	surface->Release();
 
-	if (D3D_OK != (*texPtr)->LockRect(0, &r1, nullptr, 0)) {
+	if (D3D_OK != outputTexture->LockRect(0, &r1, nullptr, 0)) {
 		puts("Error in LockRect 1");
 		texPtr2->Release();
+		if (uploadTexture)
+			uploadTexture->Release();
 		SokuLib::textureMgr.remove(retId);
 		return false;
 	}
 	if (D3D_OK != texPtr2->LockRect(0, &r2, nullptr, 0)) {
 		puts("Error in LockRect 2");
-		(*texPtr)->UnlockRect(0);
+		outputTexture->UnlockRect(0);
 		texPtr2->Release();
+		if (uploadTexture)
+			uploadTexture->Release();
 		SokuLib::textureMgr.remove(retId);
 		return false;
 	}
 
 	auto ptr1 = reinterpret_cast<SokuLib::DrawUtils::DxSokuColor *>(r1.pBits);
 	auto ptr2 = reinterpret_cast<SokuLib::DrawUtils::DxSokuColor *>(r2.pBits);
+	auto outputLineSize = r1.Pitch / sizeof(*ptr1);
+	auto inputLineSize = r2.Pitch / sizeof(*ptr2);
 
-	for (int i = 0; i < texsize.x * texsize.y; i++) {
-		auto color = ptr2[i];
+	for (int y = 0; y < texsize.y; y++) {
+		memset(ptr1 + y * outputLineSize, 0, texsize.x * sizeof(*ptr1));
+		for (int x = 0; x < texsize.x; x++) {
+			auto color = ptr2[y * inputLineSize + x];
 
-		if (color) {
-			auto mean = (color.r + color.g + color.b) / 3;
+			if (color) {
+				auto mean = (color.r + color.g + color.b) / 3;
 
-			(font.description.shadow ? ptr2 : ptr1)[i] = SokuLib::Color{0xFF, 0xFF, 0xFF, static_cast<unsigned char>(mean)};
+				(font.description.shadow ? ptr2 + y * inputLineSize : ptr1 + y * outputLineSize)[x] = SokuLib::Color{0xFF, 0xFF, 0xFF, static_cast<unsigned char>(mean)};
+			}
 		}
 	}
 	if (font.description.shadow)
-		repl_textShadow(texsize.y, texsize.x, texsize.x, reinterpret_cast<unsigned *>(r2.pBits), reinterpret_cast<unsigned *>(r1.pBits));
+		repl_textShadow(texsize.y, texsize.x, inputLineSize, outputLineSize, reinterpret_cast<unsigned *>(r2.pBits), reinterpret_cast<unsigned *>(r1.pBits));
 	texPtr2->UnlockRect(0);
-	(*texPtr)->UnlockRect(0);
+	outputTexture->UnlockRect(0);
 	texPtr2->Release();
+	if (d3d9Ex) {
+		EnterCriticalSection((LPCRITICAL_SECTION)0x8a0e14);
+		ret = SokuLib::pd3dDev->UpdateTexture(uploadTexture, *texPtr);
+		LeaveCriticalSection((LPCRITICAL_SECTION)0x8a0e14);
+		uploadTexture->Release();
+		if (FAILED(ret)) {
+			puts("Error in UpdateTexture");
+			SokuLib::textureMgr.remove(retId);
+			return false;
+		}
+	}
 	return true;
 }
 
