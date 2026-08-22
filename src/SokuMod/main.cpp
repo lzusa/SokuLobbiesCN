@@ -921,6 +921,8 @@ int __fastcall BattleClientOnProcess(SokuLib::BattleClient *This)
 }
 int __fastcall SelectClientOnProcess(SokuLib::SelectClient *This)
 {
+	if (activeMenu)
+		activeMenu->routePendingHotkeys();
 	processCommon(true);
 	selectCommon();
 	return (This->*og_SelectClientOnProcess)();
@@ -946,6 +948,8 @@ int __fastcall BattleServerOnProcess(SokuLib::BattleServer *This)
 }
 int __fastcall SelectServerOnProcess(SokuLib::SelectServer *This)
 {
+	if (activeMenu)
+		activeMenu->routePendingHotkeys();
 	processCommon(true);
 	selectCommon();
 	return (This->*og_SelectServerOnProcess)();
