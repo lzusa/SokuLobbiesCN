@@ -859,7 +859,7 @@ void LobbyMenu::_connectLoop()
 	int i = 0;
 
 	while (this->_open) {
-		for (int j = 0; ; j++) {
+		for (int j = 0; this->_open; j++) {
 			this->_connectionsMutex.lock();
 			if (j >= this->_connections.size()) {
 				this->_connectionsMutex.unlock();
@@ -891,7 +891,9 @@ void LobbyMenu::_connectLoop()
 					runOnUI(fct);
 
 					// for local lobby server
-					const auto& ip = connection->ip != getMyIp() ? connection->ip : connection->redirectIpForLocalServer;
+					const auto& ip = connection->ip != getMyIp(&this->_open) ? connection->ip : connection->redirectIpForLocalServer;
+					if (!this->_open)
+						break;
 					connection->c = std::make_shared<Connection>(ip, connection->port, this->_loadedSettings);
 
 					std::lock_guard<std::mutex> functionMutexGuard(connection->c->functionMutex);
@@ -978,6 +980,8 @@ void LobbyMenu::_connectLoop()
 					runOnUI(fct);
 				}
 			} catch (std::exception &e) {
+				if (!this->_open)
+					break;
 				auto ptr = strdup(e.what());
 				auto fct = [ptr, connection]{
 					connection->lastName.clear();
@@ -998,6 +1002,8 @@ void LobbyMenu::_connectLoop()
 				runOnUI(fct);
 			}
 		}
+		if (!this->_open)
+			break;
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 		i = (i + 1) % 200;
 	}

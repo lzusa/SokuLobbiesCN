@@ -94,6 +94,7 @@ Connection::Connection(const std::string &host, unsigned short port, const Playe
 Connection::~Connection()
 {
 	this->_init = false;
+	this->_connected = false;
 	{
 		std::lock_guard<std::mutex> meMutexGuard(this->meMutex);
 		std::lock_guard<std::mutex> playerMutexGuard(this->_playerMutex);
@@ -101,9 +102,11 @@ Connection::~Connection()
 		if (this->onDisconnect)
 			this->onDisconnect();
 	}
+	// Closing the socket first interrupts a pending connect/recv so joining cannot
+	// block the game thread until the operating system network timeout expires.
+	this->_socket.disconnect();
 	if (this->_connectThread.joinable())
 		this->_connectThread.join();
-	this->_socket.disconnect();
 	if (this->_netThread.joinable())
 		this->_netThread.join();
 	if (this->_posThread.joinable())
@@ -125,8 +128,8 @@ void Connection::startThread()
 			this->_socket.connect(this->_host, this->_port);
 			this->_hasConnected = true;
 		} catch (std::exception &e) {
-			std::lock_guard<std::mutex> playerMutexGuard(this->_playerMutex);
 			std::lock_guard<std::mutex> meMutexGuard(this->meMutex);
+			std::lock_guard<std::mutex> playerMutexGuard(this->_playerMutex);
 			this->error(e.what());
 		}
 	});
