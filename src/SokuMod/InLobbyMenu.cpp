@@ -519,7 +519,17 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 			}
 		}
 		bool autoPopup = chatPopupMode == CHAT_POPUP_ALL || (chatPopupMode == CHAT_POPUP_OPPONENTS && opponentMessage);
-		if (chatPopupMode != CHAT_POPUP_NEVER)
+		auto endsWith = [&msg](const char *suffix) {
+			auto length = strlen(suffix);
+
+			return msg.size() >= length && msg.compare(msg.size() - length, length, suffix) == 0;
+		};
+		bool playerPresenceMessage = player == 0 && (
+			endsWith(" has joined the lobby.") ||
+			endsWith(" has disconnected") ||
+			msg.find(" has been kicked:") != std::string::npos
+		);
+		if (chatPopupMode != CHAT_POPUP_NEVER && !playerPresenceMessage)
 			playSound(49);
 		this->_addMessageToList(channel, player, msg, colorOverride, autoPopup);
 		if (opponentDisconnected)
