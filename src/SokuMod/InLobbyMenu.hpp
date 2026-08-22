@@ -9,6 +9,7 @@
 #include <mutex>
 #include <thread>
 #include <queue>
+#include <deque>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -185,12 +186,25 @@ private:
 	int _selectionEnd = -1;
 	bool _editingText = false;
 	bool _emotePickerOpen = false;
-	bool _emotePickerClosedThisFrame = false;
 	bool _emotePickerNavigationHeld = false;
 	unsigned _emotePickerSelection = 0;
 	std::vector<unsigned> _emotePickerOrder;
 	bool _quickMessageMenuOpen = false;
-	bool _quickMessageMenuClosedThisFrame = false;
+	struct HotkeyEvent {
+		unsigned key;
+		bool pressed;
+		bool mapped;
+		uint64_t escapeGeneration;
+	};
+	std::deque<HotkeyEvent> _hotkeyEvents;
+	bool _keyboardEscapeDown = false;
+	bool _mappedEscapeDown = false;
+	uint64_t _nextEscapeGeneration = 0;
+	uint64_t _keyboardEscapeGeneration = 0;
+	uint64_t _mappedEscapeGeneration = 0;
+	uint64_t _consumedKeyboardEscapeGeneration = 0;
+	uint64_t _nativeKeyboardEscapeGeneration = 0;
+	bool _lobbyExitRequested = false;
 	SokuLib::DrawUtils::Sprite _quickMessageSprites[9];
 	SokuLib::Vector2i _quickMessageTextSizes[9];
 	SokuLib::DrawUtils::Sprite _chatPopupModeSprites[3];
@@ -212,6 +226,9 @@ private:
 	void _processPendingTextureWork();
 	void _logChatToFile(unsigned player, const std::string &msg);
 	void _inputBoxUpdate();
+	void _processHotkeyEvents();
+	void _setEscapeSource(bool &source, uint64_t &generation, bool down, bool mapped);
+	void _consumeEscape(const HotkeyEvent &event);
 	void _updateEmotePicker();
 	void _renderEmotePicker();
 	void _initEmotePickerOrder();
@@ -264,6 +281,11 @@ public:
 	void renderChat();
 	bool isInputing();
 	bool isEmotePickerOpen() const;
+	void routePendingHotkeys();
+	void onWindowKeyEvent(unsigned key, bool pressed, bool repeated);
+	void onInputFocusLost();
+	void setMappedEscapeDown(bool down);
+	bool filterNativeEscape(bool pressed);
 };
 
 extern InLobbyMenu *activeMenu;

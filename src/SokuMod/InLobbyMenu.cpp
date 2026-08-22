@@ -131,7 +131,8 @@ static LRESULT __stdcall Hooked_WndProc(const HWND hWnd, UINT uMsg, WPARAM wPara
 		WM_IME_COMPOSITION,
 		WM_IME_NOTIFY,
 		WM_KEYDOWN,
-		WM_KEYUP
+		WM_KEYUP,
+		WM_KILLFOCUS
 	};
 	const size_t size = sizeof(eventList) / sizeof(*eventList);
 
@@ -165,7 +166,9 @@ static LRESULT __stdcall Hooked_WndProc(const HWND hWnd, UINT uMsg, WPARAM wPara
 		ptrMutex.unlock();
 		return CallWindowProc(Original_WndProc, hWnd, uMsg, wParam, lParam);
 	}
-	if (uMsg == WM_INPUTLANGCHANGE) {
+	if (uMsg == WM_KILLFOCUS) {
+		activeMenu->onInputFocusLost();
+	} else if (uMsg == WM_INPUTLANGCHANGE) {
 		activeMenu->immComposition.clear();
 	} else if (uMsg == WM_IME_STARTCOMPOSITION) {
 		activeMenu->immCtx = ImmGetContext(SokuLib::window);
@@ -255,6 +258,11 @@ static LRESULT __stdcall Hooked_WndProc(const HWND hWnd, UINT uMsg, WPARAM wPara
 			activeMenu->textChanged |= 4;
 		}
 	} else if (uMsg == WM_KEYDOWN) {
+		activeMenu->onWindowKeyEvent(
+			static_cast<unsigned>(wParam),
+			true,
+			(lParam & (1u << 30)) != 0
+		);
 		BYTE keyboardState[256];
 		GetKeyboardState(keyboardState);
 		activeMenu->keyBufferUsed = ToUnicode(
@@ -272,11 +280,15 @@ static LRESULT __stdcall Hooked_WndProc(const HWND hWnd, UINT uMsg, WPARAM wPara
 			if (!decoded.empty())
 				activeMenu->onKeyPressed(decoded[0]);
 		}
-		if (wParam < sizeof(activeMenu->keysPressed) / sizeof(*activeMenu->keysPressed)) {
+		if (
+			wParam < sizeof(activeMenu->keysPressed) / sizeof(*activeMenu->keysPressed) &&
+			wParam != VK_ESCAPE && wParam != VK_F1 && wParam != VK_F2
+		) {
 			std::lock_guard<std::mutex> lock_(activeMenu->keyTimersMutex);
 			activeMenu->keysPressed[wParam] = true;
 		}
 	} else if (uMsg == WM_KEYUP) {
+		activeMenu->onWindowKeyEvent(static_cast<unsigned>(wParam), false, false);
 		activeMenu->onKeyReleased();
 	}
 
@@ -770,6 +782,7 @@ int InLobbyMenu::onProcess()
 		auto inputs = SokuLib::inputMgrs.input;
 		auto me = this->_connection->getMe();
 
+		this->routePendingHotkeys();
 		if (this->_translateAnimation) {
 			if (this->_translateAnimation)
 				this->_translate += this->_translateStep;
@@ -810,11 +823,8 @@ int InLobbyMenu::onProcess()
 				messageBox->active = false;
 			}
 		}
-		if (
-			SokuLib::checkKeyOneshot(DIK_ESCAPE, 0, 0, 0) &&
-			!this->_emotePickerClosedThisFrame &&
-			!this->_quickMessageMenuClosedThisFrame
-		) {
+		if (this->_lobbyExitRequested) {
+			this->_lobbyExitRequested = false;
 			playSound(0x29);
 			if (!this->_editingText) {
 				meMutexLock.unlock();
@@ -829,8 +839,7 @@ int InLobbyMenu::onProcess()
 				this->_parent->choice = 0;
 				this->_parent->subchoice = 0;
 				return false;
-			} else
-				this->_editingText = false;
+			}
 		}
 
 		auto &bg = lobbyData->backgrounds[this->_background];
@@ -2219,8 +2228,7 @@ void InLobbyMenu::_inputBoxUpdate()
 	if (GetForegroundWindow() != SokuLib::window)
 		return;
 	std::lock_guard<std::mutex> lock_(this->keyTimersMutex);
-	this->_emotePickerClosedThisFrame = false;
-	this->_quickMessageMenuClosedThisFrame = false;
+	this->_processHotkeyEvents();
 	if (this->_emotePickerOpen) {
 		this->_updateEmotePicker();
 		goto ret_reset_keysPressed;
@@ -2240,17 +2248,6 @@ void InLobbyMenu::_inputBoxUpdate()
 			this->_chatSeat.tint.a = 0;
 		}
 		playSound(0x27);
-		goto ret_reset_keysPressed;
-	}
-	if (!this->_editingText && this->keysPressed[VK_F1]) {
-		this->_emotePickerOpen = true;
-		this->_normalizeEmotePickerSelection();
-		playSound(0x28);
-		goto ret_reset_keysPressed;
-	}
-	if (!this->_editingText && this->keysPressed[VK_F2]) {
-		this->_quickMessageMenuOpen = true;
-		playSound(0x28);
 		goto ret_reset_keysPressed;
 	}
 	bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
@@ -2415,6 +2412,82 @@ void InLobbyMenu::_inputBoxUpdate()
 	memset(this->keysPressed, 0, sizeof(this->keysPressed));
 }
 
+void InLobbyMenu::_processHotkeyEvents()
+{
+	while (!this->_hotkeyEvents.empty()) {
+		auto event = this->_hotkeyEvents.front();
+		this->_hotkeyEvents.pop_front();
+		if (!event.pressed)
+			continue;
+
+		if (event.key == VK_F1) {
+			if (this->_editingText)
+				continue;
+			if (this->_quickMessageMenuOpen) {
+				this->_quickMessageMenuOpen = false;
+				this->_emotePickerOpen = true;
+				this->_normalizeEmotePickerSelection();
+				playSound(0x27);
+			} else if (this->_emotePickerOpen) {
+				this->_emotePickerOpen = false;
+				playSound(0x29);
+			} else {
+				this->_emotePickerOpen = true;
+				this->_normalizeEmotePickerSelection();
+				playSound(0x28);
+			}
+			continue;
+		}
+		if (event.key == VK_F2) {
+			if (this->_editingText)
+				continue;
+			if (this->_emotePickerOpen) {
+				this->_emotePickerOpen = false;
+				this->_quickMessageMenuOpen = true;
+				playSound(0x27);
+			} else if (this->_quickMessageMenuOpen) {
+				this->_quickMessageMenuOpen = false;
+				playSound(0x29);
+			} else {
+				this->_quickMessageMenuOpen = true;
+				playSound(0x28);
+			}
+			continue;
+		}
+		if (event.key != VK_ESCAPE)
+			continue;
+		if (event.mapped) {
+			// Preserve the original controller/keymap behavior: B/X is only an
+			// Escape substitute in the emote picker. The quick-message menu and
+			// chat input merely block game input, just as before this refactor.
+			if (this->_emotePickerOpen) {
+				this->_emotePickerOpen = false;
+				playSound(0x29);
+			}
+			this->_consumeEscape(event);
+			continue;
+		}
+
+		if (this->_emotePickerOpen) {
+			this->_emotePickerOpen = false;
+			this->_consumeEscape(event);
+			playSound(0x29);
+		} else if (this->_quickMessageMenuOpen) {
+			this->_quickMessageMenuOpen = false;
+			this->_consumeEscape(event);
+			playSound(0x29);
+		} else if (this->_editingText) {
+			this->_editingText = false;
+			this->_clearSelection();
+			this->_consumeEscape(event);
+			playSound(0x29);
+		} else if (SokuLib::sceneId == SokuLib::SCENE_TITLE) {
+			this->_consumeEscape(event);
+			this->_lobbyExitRequested = true;
+		}
+	}
+}
+
 void InLobbyMenu::_initEmotePickerOrder()
 {
 	this->_emotePickerOrder.clear();
@@ -2452,18 +2525,6 @@ void InLobbyMenu::_normalizeEmotePickerSelection()
 void InLobbyMenu::_updateEmotePicker()
 {
 	this->_normalizeEmotePickerSelection();
-	if (this->keysPressed[VK_F2]) {
-		this->_emotePickerOpen = false;
-		this->_quickMessageMenuOpen = true;
-		playSound(0x27);
-		return;
-	}
-	if (this->keysPressed[VK_F1] || this->keysPressed[VK_ESCAPE]) {
-		this->_emotePickerOpen = false;
-		this->_emotePickerClosedThisFrame = this->keysPressed[VK_ESCAPE];
-		playSound(0x29);
-		return;
-	}
 	if (this->_emotePickerOrder.empty())
 		return;
 
@@ -2520,19 +2581,6 @@ void InLobbyMenu::_updateEmotePicker()
 
 void InLobbyMenu::_updateQuickMessageMenu()
 {
-	if (this->keysPressed[VK_F1]) {
-		this->_quickMessageMenuOpen = false;
-		this->_emotePickerOpen = true;
-		this->_normalizeEmotePickerSelection();
-		playSound(0x27);
-		return;
-	}
-	if (this->keysPressed[VK_F2] || this->keysPressed[VK_ESCAPE]) {
-		this->_quickMessageMenuOpen = false;
-		this->_quickMessageMenuClosedThisFrame = this->keysPressed[VK_ESCAPE];
-		playSound(0x29);
-		return;
-	}
 	for (unsigned i = 0; i < 9; i++) {
 		if (!this->keysPressed['1' + i] && !this->keysPressed[VK_NUMPAD1 + i])
 			continue;
@@ -3298,6 +3346,101 @@ bool InLobbyMenu::isInputing()
 bool InLobbyMenu::isEmotePickerOpen() const
 {
 	return this->_emotePickerOpen;
+}
+
+void InLobbyMenu::routePendingHotkeys()
+{
+	if (GetForegroundWindow() != SokuLib::window)
+		return;
+	std::lock_guard<std::mutex> lock(this->keyTimersMutex);
+	this->_processHotkeyEvents();
+}
+
+void InLobbyMenu::_setEscapeSource(bool &source, uint64_t &generation, bool down, bool mapped)
+{
+	if (source == down)
+		return;
+	source = down;
+	if (!down)
+		return;
+	generation = ++this->_nextEscapeGeneration;
+	this->_hotkeyEvents.push_back({VK_ESCAPE, true, mapped, generation});
+}
+
+void InLobbyMenu::_consumeEscape(const HotkeyEvent &event)
+{
+	if (!event.mapped)
+		this->_consumedKeyboardEscapeGeneration = event.escapeGeneration;
+}
+
+void InLobbyMenu::onWindowKeyEvent(unsigned key, bool pressed, bool repeated)
+{
+	if (key != VK_ESCAPE && key != VK_F1 && key != VK_F2)
+		return;
+	std::lock_guard<std::mutex> lock(this->keyTimersMutex);
+	if (key == VK_ESCAPE) {
+		this->_setEscapeSource(
+			this->_keyboardEscapeDown,
+			this->_keyboardEscapeGeneration,
+			pressed,
+			false
+		);
+		return;
+	}
+	if (pressed && !repeated)
+		this->_hotkeyEvents.push_back({key, true, false, 0});
+}
+
+void InLobbyMenu::onInputFocusLost()
+{
+	std::lock_guard<std::mutex> lock(this->keyTimersMutex);
+	this->_keyboardEscapeDown = false;
+	this->_mappedEscapeDown = false;
+	this->_hotkeyEvents.clear();
+	memset(this->keysPressed, 0, sizeof(this->keysPressed));
+}
+
+void InLobbyMenu::setMappedEscapeDown(bool down)
+{
+	std::lock_guard<std::mutex> lock(this->keyTimersMutex);
+	if (this->_mappedEscapeDown == down)
+		return;
+	this->_mappedEscapeDown = down;
+	if (!down)
+		return;
+
+	// Outside the emote picker B/X belongs to the game. In particular,
+	// it must keep its original meaning at an arcade machine and in native scenes.
+	if (!this->_emotePickerOpen) {
+		this->_mappedEscapeGeneration = 0;
+		return;
+	}
+	this->_mappedEscapeGeneration = ++this->_nextEscapeGeneration;
+	this->_hotkeyEvents.push_back({VK_ESCAPE, true, true, this->_mappedEscapeGeneration});
+}
+
+bool InLobbyMenu::filterNativeEscape(bool pressed)
+{
+	if (!pressed)
+		return false;
+	std::lock_guard<std::mutex> lock(this->keyTimersMutex);
+	if (
+		SokuLib::sceneId == SokuLib::SCENE_TITLE ||
+		this->_editingText || this->_emotePickerOpen || this->_quickMessageMenuOpen
+	) {
+		if (this->_keyboardEscapeGeneration)
+			this->_consumedKeyboardEscapeGeneration = this->_keyboardEscapeGeneration;
+		return false;
+	}
+	if (
+		this->_keyboardEscapeGeneration && (
+			this->_consumedKeyboardEscapeGeneration == this->_keyboardEscapeGeneration ||
+			this->_nativeKeyboardEscapeGeneration == this->_keyboardEscapeGeneration
+		)
+	)
+		return false;
+	this->_nativeKeyboardEscapeGeneration = this->_keyboardEscapeGeneration;
+	return true;
 }
 
 void InLobbyMenu::_updateMessageSprite(SokuLib::Vector2i pos, unsigned int remaining, SokuLib::Vector2i realSize, SokuLib::DrawUtils::Sprite &sprite, unsigned char alpha)

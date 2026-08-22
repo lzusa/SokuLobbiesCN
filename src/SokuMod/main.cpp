@@ -50,6 +50,57 @@ static int (SokuLib::LoadingServer::*og_LoadingServerOnProcess)();
 static int (SokuLib::LoadingServer::*og_LoadingServerOnRender)();
 static int (SokuLib::BattleManager::*og_BattleMgrOnProcess)();
 static void (SokuLib::KeymapManager::*s_origKeymapManager_SetInputs)();
+using CheckKeyOneshot = bool (__cdecl *)(int, int, int, int);
+static CheckKeyOneshot s_origCheckKeyOneshot = nullptr;
+static constexpr unsigned CHECK_KEY_HOOK_SIZE = 8;
+static constexpr unsigned char CHECK_KEY_PROLOGUE[CHECK_KEY_HOOK_SIZE] = {
+	0x8B, 0x44, 0x24, 0x10,
+	0x8B, 0x4C, 0x24, 0x0C
+};
+
+static bool __cdecl CheckKeyOneshotHook(int key, int arg2, int arg3, int arg4)
+{
+	auto pressed = s_origCheckKeyOneshot(key, arg2, arg3, arg4);
+
+	if (key != DIK_ESCAPE || !activeMenu)
+		return pressed;
+	return activeMenu->filterNativeEscape(pressed);
+}
+
+static bool canInstallCheckKeyOneshotHook()
+{
+	return memcmp(
+		reinterpret_cast<const void *>(SokuLib::ADDR_CHECK_KEY_ONESHOT),
+		CHECK_KEY_PROLOGUE,
+		CHECK_KEY_HOOK_SIZE
+	) == 0;
+}
+
+static bool installCheckKeyOneshotHook()
+{
+	auto target = reinterpret_cast<unsigned char *>(SokuLib::ADDR_CHECK_KEY_ONESHOT);
+	auto gateway = static_cast<unsigned char *>(VirtualAlloc(
+		nullptr,
+		CHECK_KEY_HOOK_SIZE + 5,
+		MEM_COMMIT | MEM_RESERVE,
+		PAGE_EXECUTE_READWRITE
+	));
+
+	if (!gateway)
+		return false;
+	memcpy(gateway, target, CHECK_KEY_HOOK_SIZE);
+	gateway[CHECK_KEY_HOOK_SIZE] = 0xE9;
+	*reinterpret_cast<int *>(gateway + CHECK_KEY_HOOK_SIZE + 1) =
+		reinterpret_cast<int>(target + CHECK_KEY_HOOK_SIZE) -
+		reinterpret_cast<int>(gateway + CHECK_KEY_HOOK_SIZE + 5);
+	s_origCheckKeyOneshot = reinterpret_cast<CheckKeyOneshot>(gateway);
+
+	target[0] = 0xE9;
+	*reinterpret_cast<int *>(target + 1) =
+		reinterpret_cast<int>(CheckKeyOneshotHook) - reinterpret_cast<int>(target + 5);
+	memset(target + 5, 0x90, CHECK_KEY_HOOK_SIZE - 5);
+	return true;
+}
 
 static std::wstring decodeIniBytes(const char *bytes, size_t size, unsigned codePage, DWORD flags = 0)
 {
@@ -857,6 +908,8 @@ int __fastcall LoadingWatchOnProcess(SokuLib::LoadingWatch *This)
 int __fastcall BattleClientOnProcess(SokuLib::BattleClient *This)
 {
 	auto &mgr = SokuLib::getBattleMgr();
+	if (activeMenu)
+		activeMenu->routePendingHotkeys();
 	auto ret = (This->*og_BattleClientOnProcess)();
 
 	processCommon(false);
@@ -880,6 +933,8 @@ int __fastcall LoadingClientOnProcess(SokuLib::LoadingClient *This)
 int __fastcall BattleServerOnProcess(SokuLib::BattleServer *This)
 {
 	auto &mgr = SokuLib::getBattleMgr();
+	if (activeMenu)
+		activeMenu->routePendingHotkeys();
 	auto ret = (This->*og_BattleServerOnProcess)();
 
 	processCommon(false);
@@ -1130,25 +1185,27 @@ void loadSoku2Config()
 static void __fastcall KeymapManagerSetInputs(SokuLib::KeymapManager *This)
 {
 	(This->*s_origKeymapManager_SetInputs)();
-	if (activeMenu && activeMenu->isEmotePickerOpen()) {
+	if (activeMenu)
+		activeMenu->setMappedEscapeDown(This->input.b != 0);
+	if (activeMenu && activeMenu->isInputing()) {
 		std::lock_guard<std::mutex> lock(activeMenu->keyTimersMutex);
 
-		if (This->input.horizontalAxis == -1)
-			activeMenu->keysPressed[VK_LEFT] = true;
-		else if (This->input.horizontalAxis == 1)
-			activeMenu->keysPressed[VK_RIGHT] = true;
-		if (This->input.verticalAxis == -1)
-			activeMenu->keysPressed[VK_UP] = true;
-		else if (This->input.verticalAxis == 1)
-			activeMenu->keysPressed[VK_DOWN] = true;
-		if (This->input.a == 1)
-			activeMenu->keysPressed[VK_RETURN] = true;
-		if (This->input.b == 1)
-			activeMenu->keysPressed[VK_ESCAPE] = true;
-		if (This->input.changeCard == 1)
-			activeMenu->keysPressed[VK_PRIOR] = true;
-		if (This->input.spellcard == 1)
-			activeMenu->keysPressed[VK_NEXT] = true;
+		if (activeMenu->isEmotePickerOpen()) {
+			if (This->input.horizontalAxis == -1)
+				activeMenu->keysPressed[VK_LEFT] = true;
+			else if (This->input.horizontalAxis == 1)
+				activeMenu->keysPressed[VK_RIGHT] = true;
+			if (This->input.verticalAxis == -1)
+				activeMenu->keysPressed[VK_UP] = true;
+			else if (This->input.verticalAxis == 1)
+				activeMenu->keysPressed[VK_DOWN] = true;
+			if (This->input.a == 1)
+				activeMenu->keysPressed[VK_RETURN] = true;
+			if (This->input.changeCard == 1)
+				activeMenu->keysPressed[VK_PRIOR] = true;
+			if (This->input.spellcard == 1)
+				activeMenu->keysPressed[VK_NEXT] = true;
+		}
 	}
 	if (
 		(activeMenu && activeMenu->isInputing()) ||
@@ -1238,6 +1295,8 @@ extern "C" __declspec(dllexport) bool CheckVersion(const BYTE hash[16]) {
 
 extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE hParentModule) {
 	DWORD old;
+	if (!canInstallCheckKeyOneshotHook())
+		return false;
 
 #ifdef _DEBUG
 	FILE *_;
@@ -1334,6 +1393,10 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE hPar
 	VirtualProtect((PVOID)RDATA_SECTION_OFFSET, RDATA_SECTION_SIZE, old, &old);
 
 	VirtualProtect((PVOID)TEXT_SECTION_OFFSET, TEXT_SECTION_SIZE, PAGE_EXECUTE_WRITECOPY, &old);
+	if (!installCheckKeyOneshotHook()) {
+		VirtualProtect((PVOID)TEXT_SECTION_OFFSET, TEXT_SECTION_SIZE, old, &old);
+		return false;
+	}
 	s_origKeymapManager_SetInputs = SokuLib::union_cast<void (SokuLib::KeymapManager::*)()>(SokuLib::TamperNearJmpOpr(0x40A45D, KeymapManagerSetInputs));
 
 	if (*((uint8_t*)0x40104c) != 0xe8) {
