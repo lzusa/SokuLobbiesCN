@@ -51,43 +51,18 @@ static int (SokuLib::LoadingServer::*og_LoadingServerOnRender)();
 static int (SokuLib::BattleManager::*og_BattleMgrOnProcess)();
 static void (SokuLib::KeymapManager::*s_origKeymapManager_SetInputs)();
 
-static std::wstring decodeIniText(const std::string &bytes)
+static std::wstring decodeIniBytes(const char *bytes, size_t size, unsigned codePage, DWORD flags = 0)
 {
-	if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF && static_cast<unsigned char>(bytes[1]) == 0xFE) {
-		std::wstring result;
-
-		result.reserve((bytes.size() - 2) / 2);
-		for (size_t i = 2; i + 1 < bytes.size(); i += 2)
-			result += static_cast<wchar_t>(static_cast<unsigned char>(bytes[i]) | (static_cast<unsigned char>(bytes[i + 1]) << 8));
+	std::wstring result;
+	if (!size)
 		return result;
-	}
-	if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFE && static_cast<unsigned char>(bytes[1]) == 0xFF) {
-		std::wstring result;
-
-		result.reserve((bytes.size() - 2) / 2);
-		for (size_t i = 2; i + 1 < bytes.size(); i += 2)
-			result += static_cast<wchar_t>((static_cast<unsigned char>(bytes[i]) << 8) | static_cast<unsigned char>(bytes[i + 1]));
+	auto resultSize = MultiByteToWideChar(codePage, flags, bytes, static_cast<int>(size), nullptr, 0);
+	if (!resultSize)
 		return result;
-	}
-
-	size_t offset = bytes.size() >= 3 &&
-		static_cast<unsigned char>(bytes[0]) == 0xEF &&
-		static_cast<unsigned char>(bytes[1]) == 0xBB &&
-		static_cast<unsigned char>(bytes[2]) == 0xBF ? 3 : 0;
-	auto decode = [&](unsigned codePage, DWORD flags) {
-		std::wstring result;
-		auto size = MultiByteToWideChar(codePage, flags, bytes.data() + offset, static_cast<int>(bytes.size() - offset), nullptr, 0);
-
-		if (!size)
-			return result;
-		result.resize(size);
-		if (!MultiByteToWideChar(codePage, flags, bytes.data() + offset, static_cast<int>(bytes.size() - offset), result.data(), size))
-			result.clear();
-		return result;
-	};
-	auto result = decode(CP_UTF8, MB_ERR_INVALID_CHARS);
-
-	return result.empty() && bytes.size() != offset ? decode(CP_ACP, 0) : result;
+	result.resize(resultSize);
+	if (!MultiByteToWideChar(codePage, flags, bytes, static_cast<int>(size), result.data(), resultSize))
+		result.clear();
+	return result;
 }
 
 static void loadQuickMessages()
@@ -103,40 +78,107 @@ static void loadQuickMessages()
 	if (!file)
 		return;
 	std::string bytes{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
-	std::wistringstream stream(decodeIniText(bytes));
-	std::wstring line;
-	bool inLobbySection = false;
 	auto trim = [](std::wstring &value) {
 		value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](wchar_t c) { return !std::iswspace(c); }));
 		value.erase(std::find_if(value.rbegin(), value.rend(), [](wchar_t c) { return !std::iswspace(c); }).base(), value.end());
 	};
+	auto parseWideText = [&](const std::wstring &text) {
+		std::wistringstream stream(text);
+		std::wstring line;
+		bool inLobbySection = false;
 
+		while (std::getline(stream, line)) {
+			if (!line.empty() && line.back() == L'\r')
+				line.pop_back();
+			trim(line);
+			if (line.empty() || line[0] == L';' || line[0] == L'#')
+				continue;
+			if (line.front() == L'[' && line.back() == L']') {
+				auto section = line.substr(1, line.size() - 2);
+				trim(section);
+				inLobbySection = _wcsicmp(section.c_str(), L"Lobby") == 0;
+				continue;
+			}
+			if (!inLobbySection)
+				continue;
+			auto separator = line.find(L'=');
+			if (separator == std::wstring::npos)
+				continue;
+			auto key = line.substr(0, separator);
+			auto value = line.substr(separator + 1);
+			trim(key);
+			trim(value);
+			for (unsigned i = 0; i < 9; i++) {
+				auto expected = L"QuickMessage" + std::to_wstring(i + 1);
+				if (_wcsicmp(key.c_str(), expected.c_str()) == 0) {
+					quickMessages[i] = value.substr(0, 512);
+					break;
+				}
+			}
+		}
+	};
+
+	if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF && static_cast<unsigned char>(bytes[1]) == 0xFE) {
+		std::wstring text;
+		text.reserve((bytes.size() - 2) / 2);
+		for (size_t i = 2; i + 1 < bytes.size(); i += 2)
+			text += static_cast<wchar_t>(static_cast<unsigned char>(bytes[i]) | (static_cast<unsigned char>(bytes[i + 1]) << 8));
+		parseWideText(text);
+		return;
+	}
+	if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFE && static_cast<unsigned char>(bytes[1]) == 0xFF) {
+		std::wstring text;
+		text.reserve((bytes.size() - 2) / 2);
+		for (size_t i = 2; i + 1 < bytes.size(); i += 2)
+			text += static_cast<wchar_t>((static_cast<unsigned char>(bytes[i]) << 8) | static_cast<unsigned char>(bytes[i + 1]));
+		parseWideText(text);
+		return;
+	}
+	if (bytes.size() >= 3 && static_cast<unsigned char>(bytes[0]) == 0xEF && static_cast<unsigned char>(bytes[1]) == 0xBB && static_cast<unsigned char>(bytes[2]) == 0xBF) {
+		parseWideText(decodeIniBytes(bytes.data() + 3, bytes.size() - 3, CP_UTF8, MB_ERR_INVALID_CHARS));
+		return;
+	}
+
+	auto trimBytes = [](std::string &value) {
+		auto whitespace = [](unsigned char c) { return c == ' ' || c == '\t' || c == '\r'; };
+		value.erase(value.begin(), std::find_if(value.begin(), value.end(), [&](unsigned char c) { return !whitespace(c); }));
+		value.erase(std::find_if(value.rbegin(), value.rend(), [&](unsigned char c) { return !whitespace(c); }).base(), value.end());
+	};
+	auto decodeValue = [&](const std::string &value) {
+		auto result = decodeIniBytes(value.data(), value.size(), CP_UTF8, MB_ERR_INVALID_CHARS);
+		if (!result.empty() || value.empty())
+			return result;
+		result = decodeIniBytes(value.data(), value.size(), 936);
+		if (!result.empty())
+			return result;
+		return decodeIniBytes(value.data(), value.size(), CP_ACP);
+	};
+	std::istringstream stream(bytes);
+	std::string line;
+	bool inLobbySection = false;
 	while (std::getline(stream, line)) {
-		if (!line.empty() && line.back() == L'\r')
-			line.pop_back();
-		std::wstring parsed = line;
-		trim(parsed);
-		if (parsed.empty() || parsed[0] == L';' || parsed[0] == L'#')
+		trimBytes(line);
+		if (line.empty() || line[0] == ';' || line[0] == '#')
 			continue;
-		if (parsed.front() == L'[' && parsed.back() == L']') {
-			auto section = parsed.substr(1, parsed.size() - 2);
-			trim(section);
-			inLobbySection = _wcsicmp(section.c_str(), L"Lobby") == 0;
+		if (line.front() == '[' && line.back() == ']') {
+			auto section = line.substr(1, line.size() - 2);
+			trimBytes(section);
+			inLobbySection = _stricmp(section.c_str(), "Lobby") == 0;
 			continue;
 		}
 		if (!inLobbySection)
 			continue;
-		auto separator = parsed.find(L'=');
-		if (separator == std::wstring::npos)
+		auto separator = line.find('=');
+		if (separator == std::string::npos)
 			continue;
-		auto key = parsed.substr(0, separator);
-		auto value = parsed.substr(separator + 1);
-		trim(key);
-		trim(value);
+		auto key = line.substr(0, separator);
+		auto value = line.substr(separator + 1);
+		trimBytes(key);
+		trimBytes(value);
 		for (unsigned i = 0; i < 9; i++) {
-			auto expected = L"QuickMessage" + std::to_wstring(i + 1);
-			if (_wcsicmp(key.c_str(), expected.c_str()) == 0) {
-				quickMessages[i] = value.substr(0, 512);
+			auto expected = "QuickMessage" + std::to_string(i + 1);
+			if (_stricmp(key.c_str(), expected.c_str()) == 0) {
+				quickMessages[i] = decodeValue(value).substr(0, 512);
 				break;
 			}
 		}
