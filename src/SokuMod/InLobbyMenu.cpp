@@ -2597,9 +2597,12 @@ void InLobbyMenu::_processHotkeyEvents()
 			this->_clearSelection();
 			this->_consumeEscape(event);
 			playSound(0x29);
-		} else if (SokuLib::sceneId == SokuLib::SCENE_TITLE) {
+		} else if (event.escapeOwner == EscapeOwner::MOD_UI) {
 			this->_consumeEscape(event);
-			this->_lobbyExitRequested = true;
+		} else if (event.escapeOwner == EscapeOwner::LOBBY) {
+			this->_consumeEscape(event);
+			if (SokuLib::sceneId == SokuLib::SCENE_TITLE && SokuLib::newSceneId == SokuLib::SCENE_TITLE)
+				this->_lobbyExitRequested = true;
 		}
 	}
 }
@@ -3485,7 +3488,25 @@ void InLobbyMenu::_setEscapeSource(bool &source, uint64_t &generation, bool down
 	if (!down)
 		return;
 	generation = ++this->_nextEscapeGeneration;
-	this->_hotkeyEvents.push_back({VK_ESCAPE, true, mapped, generation});
+	auto owner = mapped ? EscapeOwner::MOD_UI : this->_classifyEscapeOwner();
+	if (!mapped) {
+		this->_keyboardEscapeOwner = owner;
+		this->_keyboardEscapeScene = SokuLib::sceneId;
+	}
+	this->_hotkeyEvents.push_back({VK_ESCAPE, true, mapped, generation, owner, SokuLib::sceneId});
+}
+
+InLobbyMenu::EscapeOwner InLobbyMenu::_classifyEscapeOwner() const
+{
+	if (this->_editingText || this->_emotePickerOpen || this->_quickMessageMenuOpen)
+		return EscapeOwner::MOD_UI;
+	if (std::any_of(this->_hotkeyEvents.begin(), this->_hotkeyEvents.end(), [](const HotkeyEvent &event) {
+		return event.pressed && (event.key == VK_F1 || event.key == VK_F2);
+	}))
+		return EscapeOwner::MOD_UI;
+	if (SokuLib::sceneId == SokuLib::SCENE_TITLE && SokuLib::newSceneId == SokuLib::SCENE_TITLE)
+		return EscapeOwner::LOBBY;
+	return EscapeOwner::NATIVE_GAME;
 }
 
 void InLobbyMenu::_consumeEscape(const HotkeyEvent &event)
@@ -3509,7 +3530,7 @@ void InLobbyMenu::onWindowKeyEvent(unsigned key, bool pressed, bool repeated)
 		return;
 	}
 	if (pressed && !repeated)
-		this->_hotkeyEvents.push_back({key, true, false, 0});
+		this->_hotkeyEvents.push_back({key, true, false, 0, EscapeOwner::NATIVE_GAME, SokuLib::sceneId});
 }
 
 void InLobbyMenu::onInputFocusLost()
@@ -3537,7 +3558,7 @@ void InLobbyMenu::setMappedEscapeDown(bool down)
 		return;
 	}
 	this->_mappedEscapeGeneration = ++this->_nextEscapeGeneration;
-	this->_hotkeyEvents.push_back({VK_ESCAPE, true, true, this->_mappedEscapeGeneration});
+	this->_hotkeyEvents.push_back({VK_ESCAPE, true, true, this->_mappedEscapeGeneration, EscapeOwner::MOD_UI, SokuLib::sceneId});
 }
 
 bool InLobbyMenu::filterNativeEscape(bool pressed)
@@ -3546,13 +3567,18 @@ bool InLobbyMenu::filterNativeEscape(bool pressed)
 		return false;
 	std::lock_guard<std::mutex> lock(this->keyTimersMutex);
 	if (
-		SokuLib::sceneId == SokuLib::SCENE_TITLE ||
-		this->_editingText || this->_emotePickerOpen || this->_quickMessageMenuOpen
+		this->_keyboardEscapeGeneration && (
+			this->_keyboardEscapeOwner != EscapeOwner::NATIVE_GAME ||
+			SokuLib::sceneId != this->_keyboardEscapeScene ||
+			SokuLib::newSceneId != this->_keyboardEscapeScene
+		)
 	) {
 		if (this->_keyboardEscapeGeneration)
 			this->_consumedKeyboardEscapeGeneration = this->_keyboardEscapeGeneration;
 		return false;
 	}
+	if (!this->_keyboardEscapeGeneration && this->_classifyEscapeOwner() != EscapeOwner::NATIVE_GAME)
+		return false;
 	if (
 		this->_keyboardEscapeGeneration && (
 			this->_consumedKeyboardEscapeGeneration == this->_keyboardEscapeGeneration ||

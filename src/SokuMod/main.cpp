@@ -897,11 +897,15 @@ int __fastcall BattleOnProcess(SokuLib::Battle *This)
 }
 int __fastcall BattleWatchOnProcess(SokuLib::BattleWatch *This)
 {
+	if (activeMenu)
+		activeMenu->routePendingHotkeys();
 	processCommon(false);
 	return (This->*og_BattleWatchOnProcess)();
 }
 int __fastcall LoadingWatchOnProcess(SokuLib::LoadingWatch *This)
 {
+	if (activeMenu)
+		activeMenu->routePendingHotkeys();
 	processCommon(true);
 	return (This->*og_LoadingWatchOnProcess)();
 }
@@ -929,6 +933,8 @@ int __fastcall SelectClientOnProcess(SokuLib::SelectClient *This)
 }
 int __fastcall LoadingClientOnProcess(SokuLib::LoadingClient *This)
 {
+	if (activeMenu)
+		activeMenu->routePendingHotkeys();
 	processCommon(true);
 	return (This->*og_LoadingClientOnProcess)();
 }
@@ -956,6 +962,8 @@ int __fastcall SelectServerOnProcess(SokuLib::SelectServer *This)
 }
 int __fastcall LoadingServerOnProcess(SokuLib::LoadingServer *This)
 {
+	if (activeMenu)
+		activeMenu->routePendingHotkeys();
 	processCommon(true);
 	return (This->*og_LoadingServerOnProcess)();
 }

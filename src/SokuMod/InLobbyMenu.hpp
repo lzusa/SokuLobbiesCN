@@ -197,11 +197,18 @@ private:
 	unsigned _emotePickerSelection = 0;
 	std::vector<unsigned> _emotePickerOrder;
 	bool _quickMessageMenuOpen = false;
+	enum class EscapeOwner {
+		NATIVE_GAME,
+		LOBBY,
+		MOD_UI,
+	};
 	struct HotkeyEvent {
 		unsigned key;
 		bool pressed;
 		bool mapped;
 		uint64_t escapeGeneration;
+		EscapeOwner escapeOwner;
+		SokuLib::Scene escapeScene;
 	};
 	std::deque<HotkeyEvent> _hotkeyEvents;
 	bool _keyboardEscapeDown = false;
@@ -211,6 +218,8 @@ private:
 	uint64_t _mappedEscapeGeneration = 0;
 	uint64_t _consumedKeyboardEscapeGeneration = 0;
 	uint64_t _nativeKeyboardEscapeGeneration = 0;
+	EscapeOwner _keyboardEscapeOwner = EscapeOwner::NATIVE_GAME;
+	SokuLib::Scene _keyboardEscapeScene = SokuLib::SCENE_TITLE;
 	bool _lobbyExitRequested = false;
 	SokuLib::DrawUtils::Sprite _quickMessageSprites[9];
 	SokuLib::Vector2i _quickMessageTextSizes[9];
@@ -236,6 +245,7 @@ private:
 	void _logChatToFile(unsigned player, const std::string &msg);
 	void _inputBoxUpdate();
 	void _processHotkeyEvents();
+	EscapeOwner _classifyEscapeOwner() const;
 	void _setEscapeSource(bool &source, uint64_t &generation, bool down, bool mapped);
 	void _consumeEscape(const HotkeyEvent &event);
 	void _updateEmotePicker();
