@@ -35,7 +35,6 @@
 #define ELEVEATOR_CTR_DIVIDER 90.f
 
 #define DEBUG_COLOR 0x404040
-#define OPPONENT_CHAT_COLOR 0xFF80C0
 
 struct CDesignSprite {
 	void *vftable; // =008576ac
@@ -455,14 +454,14 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 				auto now = std::chrono::steady_clock::now();
 				bool highlighted = this->_recentOpponent->matchActive || now < this->_recentOpponent->expiresAt;
 				if (highlighted && player == this->_recentOpponent->playerId)
-					colorOverride = OPPONENT_CHAT_COLOR;
+					colorOverride = opponentChatColor;
 				if (player == 0) {
 					auto disconnectPrefix = this->_recentOpponent->playerName + " has disconnected";
 					auto kickedPrefix = this->_recentOpponent->playerName + " has been kicked:";
 					opponentDisconnected = msg.compare(0, disconnectPrefix.size(), disconnectPrefix) == 0 ||
 						msg.compare(0, kickedPrefix.size(), kickedPrefix) == 0;
 					if (highlighted && opponentDisconnected)
-						colorOverride = OPPONENT_CHAT_COLOR;
+						colorOverride = opponentChatColor;
 				}
 			}
 		}

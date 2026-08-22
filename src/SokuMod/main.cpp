@@ -6,6 +6,9 @@
 #include <fstream>
 #include <memory>
 #include <vector>
+#include <algorithm>
+#include <cstdlib>
+#include <cwctype>
 #include <SokuLib.hpp>
 #include <shlwapi.h>
 #include "data.hpp"
@@ -64,6 +67,7 @@ unsigned chatKey;
 unsigned lobbyJoinTries;
 unsigned lobbyJoinInterval;
 unsigned maxChatMessages;
+unsigned opponentChatColor = 0x7FA6D9;
 unsigned short servPort;
 unsigned short hostPort;
 bool hasSoku2 = false;
@@ -1101,6 +1105,19 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE hPar
 	lobbyJoinTries = GetPrivateProfileIntW(L"Lobby", L"JoinTries", 15, profilePath);
 	lobbyJoinInterval = GetPrivateProfileIntW(L"Lobby", L"JoinInterval", 1, profilePath);
 	maxChatMessages = GetPrivateProfileIntW(L"Lobby", L"MaxChatMessages", 100, profilePath);
+	{
+		wchar_t colorBuffer[32];
+		GetPrivateProfileStringW(L"Lobby", L"OpponentChatColor", L"7FA6D9", colorBuffer, sizeof(colorBuffer) / sizeof(*colorBuffer), profilePath);
+		std::wstring color{colorBuffer};
+		color.erase(color.begin(), std::find_if(color.begin(), color.end(), [](wchar_t c){ return !std::iswspace(c); }));
+		color.erase(std::find_if(color.rbegin(), color.rend(), [](wchar_t c){ return !std::iswspace(c); }).base(), color.end());
+		if (!color.empty() && color.front() == L'#')
+			color.erase(color.begin());
+		else if (color.size() >= 2 && color[0] == L'0' && (color[1] == L'x' || color[1] == L'X'))
+			color.erase(0, 2);
+		if (color.size() == 6 && std::all_of(color.begin(), color.end(), [](wchar_t c){ return std::iswxdigit(c) != 0; }))
+			opponentChatColor = std::wcstoul(color.c_str(), nullptr, 16);
+	}
 	lobbyJoinTries += !lobbyJoinTries;
 	lobbyJoinInterval += !lobbyJoinInterval;
 
