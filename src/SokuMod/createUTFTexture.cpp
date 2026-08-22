@@ -4,11 +4,16 @@
 
 #include "createUTFTexture.hpp"
 
+#include <map>
+#include <string>
+#include <tuple>
+#include <utility>
+
 bool textureUnderline = false;
 
-static void setFont(HDC context, SokuLib::SWRFont &font, bool sharp)
+static HFONT createFont(const SokuLib::SWRFont &font, bool sharp)
 {
-	font.font = CreateFontA(
+	return CreateFontA(
 		font.description.height,
 		0,
 		0,
@@ -24,9 +29,90 @@ static void setFont(HDC context, SokuLib::SWRFont &font, bool sharp)
 		FIXED_PITCH | FF_MODERN,
 		font.description.faceName
 	);
+}
+
+static void setFont(HDC context, SokuLib::SWRFont &font, bool sharp)
+{
+	font.font = createFont(font, sharp);
 	font.hdc = context;
 	font.gdiobj = SelectObject(context, font.font);
 }
+
+static void unsetFont(HDC context, SokuLib::SWRFont &font)
+{
+	if (font.gdiobj)
+		SelectObject(context, font.gdiobj);
+	if (font.font)
+		DeleteObject(font.font);
+	font.gdiobj = nullptr;
+	font.font = nullptr;
+	font.hdc = nullptr;
+}
+
+struct MeasurementFontKey {
+	LONG height;
+	LONG weight;
+	BYTE italic;
+	bool underline;
+	bool sharp;
+	int charset;
+	std::string faceName;
+
+	bool operator<(const MeasurementFontKey &other) const
+	{
+		return std::tie(height, weight, italic, underline, sharp, charset, faceName) <
+			std::tie(other.height, other.weight, other.italic, other.underline, other.sharp, other.charset, other.faceName);
+	}
+};
+
+class TextMeasurementContext {
+private:
+	HDC _context = CreateCompatibleDC(nullptr);
+	std::map<MeasurementFontKey, HFONT> _fonts;
+
+public:
+	~TextMeasurementContext()
+	{
+		for (const auto &[key, font] : this->_fonts)
+			DeleteObject(font);
+		if (this->_context)
+			DeleteDC(this->_context);
+	}
+
+	bool measure(const wchar_t *text, const SokuLib::SWRFont &font, bool sharp, int maxWidth, int *fit, SIZE &size)
+	{
+		if (!this->_context)
+			return false;
+		MeasurementFontKey key{
+			font.description.height,
+			font.description.weight,
+			font.description.italic,
+			textureUnderline,
+			sharp,
+			*(int *)0x411c64,
+			std::string(font.description.faceName, strnlen(font.description.faceName, sizeof(font.description.faceName)))
+		};
+		auto found = this->_fonts.find(key);
+		if (found == this->_fonts.end()) {
+			auto created = createFont(font, sharp);
+			if (!created)
+				return false;
+			found = this->_fonts.emplace(std::move(key), created).first;
+		}
+		auto previous = SelectObject(this->_context, found->second);
+		auto length = static_cast<int>(wcslen(text));
+		BOOL result;
+
+		if (fit)
+			result = GetTextExtentExPointW(this->_context, text, length, maxWidth, fit, nullptr, &size);
+		else
+			result = GetTextExtentPoint32W(this->_context, text, length, &size);
+		SelectObject(this->_context, previous);
+		return result != FALSE;
+	}
+};
+
+static thread_local TextMeasurementContext measurementContext;
 
 inline unsigned int _div255(unsigned int v) { return (v + 1 + (v >> 8)) >> 8; }
 
@@ -81,7 +167,6 @@ static void __fastcall repl_textShadow(int height, int width, int lineSize, unsi
 
 bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, SokuLib::Vector2i texsize, SokuLib::Vector2i *size, bool sharp)
 {
-	printf("Creating texture for wtext %S\n", text);
 	auto strSize = wcslen(text);
 	LPDIRECT3DTEXTURE9 *texPtr = SokuLib::textureMgr.allocate(&retId);
 	LPDIRECT3DTEXTURE9 texPtr2;
@@ -115,14 +200,15 @@ bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, 
 	if (D3D_OK != texPtr2->GetSurfaceLevel(0, &surface)) {
 		puts("Error in GetSurfaceLevel");
 		texPtr2->Release();
-		SokuLib::textureMgr.deallocate(retId);
+		SokuLib::textureMgr.remove(retId);
 		return false;
 	}
 
 	if (D3D_OK != surface->GetDC(&context)) {
 		puts("Error in GetDC");
+		surface->Release();
 		texPtr2->Release();
-		SokuLib::textureMgr.deallocate(retId);
+		SokuLib::textureMgr.remove(retId);
 		return false;
 	}
 
@@ -133,41 +219,43 @@ bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, 
 	SetTextColor(context, 0xffffff);
 	if (!TextOutW(context, font.description.offsetX, font.description.offsetY, text, strSize)) {
 		puts("Error in TextOutW");
+		unsetFont(context, font);
+		surface->ReleaseDC(context);
+		surface->Release();
 		texPtr2->Release();
-		SokuLib::textureMgr.deallocate(retId);
+		SokuLib::textureMgr.remove(retId);
 		return false;
 	}
 
 	if (size) {
 		if (!GetTextExtentPoint32W(context, text, strSize, &actualSize)) {
 			puts("Error in GetTextExtentPoint32W");
+			unsetFont(context, font);
+			surface->ReleaseDC(context);
+			surface->Release();
 			texPtr2->Release();
-			SokuLib::textureMgr.deallocate(retId);
+			SokuLib::textureMgr.remove(retId);
 			return false;
 		}
 		size->x = actualSize.cx;
 		size->y = actualSize.cy;
 	}
 
-	DeleteObject(font.font);
-	DeleteObject(font.gdiobj);
+	unsetFont(context, font);
 	surface->ReleaseDC(context);
 	surface->Release();
-	font.gdiobj = nullptr;
-	font.font = nullptr;
-	font.hdc = nullptr;
 
 	if (D3D_OK != (*texPtr)->LockRect(0, &r1, nullptr, 0)) {
 		puts("Error in LockRect 1");
 		texPtr2->Release();
-		SokuLib::textureMgr.deallocate(retId);
+		SokuLib::textureMgr.remove(retId);
 		return false;
 	}
 	if (D3D_OK != texPtr2->LockRect(0, &r2, nullptr, 0)) {
 		puts("Error in LockRect 2");
 		(*texPtr)->UnlockRect(0);
 		texPtr2->Release();
-		SokuLib::textureMgr.deallocate(retId);
+		SokuLib::textureMgr.remove(retId);
 		return false;
 	}
 
@@ -193,52 +281,23 @@ bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, 
 
 SokuLib::Vector2i getTextSize(const wchar_t *text, SokuLib::SWRFont &font, SokuLib::Vector2i texsize, bool sharp)
 {
-	auto strSize = wcslen(text);
-	LPDIRECT3DTEXTURE9 texPtr2;
-	LPDIRECT3DSURFACE9 surface;
-	HRESULT ret;
-	HDC context;
-	SIZE actualSize;
-
-	EnterCriticalSection((LPCRITICAL_SECTION)0x8a0e14);
-	ret = D3DXCreateTexture(SokuLib::pd3dDev, texsize.x, texsize.y, 1, 0, D3DFMT_X8R8G8B8, D3DPOOL_MANAGED, &texPtr2);
-	LeaveCriticalSection((LPCRITICAL_SECTION)0x8a0e14);
-	if (D3D_OK != ret) {
-		puts("Error in D3DXCreateTexture XRGB");
+	(void)texsize;
+	SIZE actualSize{};
+	if (!measurementContext.measure(text, font, sharp, 0, nullptr, actualSize))
 		return {0, 0};
-	}
-
-	if (D3D_OK != texPtr2->GetSurfaceLevel(0, &surface)) {
-		puts("Error in GetSurfaceLevel");
-		texPtr2->Release();
-		return {0, 0};
-	}
-
-	if (D3D_OK != surface->GetDC(&context)) {
-		puts("Error in GetDC");
-		texPtr2->Release();
-		return {0, 0};
-	}
-
-	font.maxWidth = texsize.x;
-	font.maxHeight = texsize.y;
-	setFont(context, font, sharp);
-	if (!GetTextExtentPoint32W(context, text, strSize, &actualSize)) {
-		puts("Error in GetTextExtentPoint32W");
-		texPtr2->Release();
-		return {0, 0};
-	}
-
-	DeleteObject(font.font);
-	DeleteObject(font.gdiobj);
-	surface->ReleaseDC(context);
-	surface->Release();
-	font.gdiobj = nullptr;
-	font.font = nullptr;
-	font.hdc = nullptr;
-	texPtr2->Release();
 	return {
 		actualSize.cx,
 		actualSize.cy
 	};
+}
+
+size_t getTextFit(const wchar_t *text, SokuLib::SWRFont &font, int maxWidth, bool sharp)
+{
+	if (maxWidth < 0)
+		return 0;
+	SIZE actualSize{};
+	int fit = 0;
+	if (!measurementContext.measure(text, font, sharp, maxWidth, &fit, actualSize))
+		return 0;
+	return static_cast<size_t>(fit);
 }

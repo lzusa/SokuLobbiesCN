@@ -9,6 +9,7 @@
 #include <mutex>
 #include <thread>
 #include <queue>
+#include <set>
 #include <chrono>
 #include <Socket.hpp>
 #include <SokuLib.hpp>
@@ -147,6 +148,12 @@ private:
 	std::map<uint32_t, PlayerTextBubble> _playerTextBubbles;
 	std::mutex _playerTextBubblesMutex;
 	std::map<uint32_t, PlayerData> _extraPlayerData;
+	std::map<uint32_t, std::string> _pendingPlayerNames;
+	std::queue<uint32_t> _pendingPlayerNameOrder;
+	std::map<uint32_t, std::string> _pendingTextBubbles;
+	std::queue<uint32_t> _pendingTextBubbleOrder;
+	std::set<uint32_t> _pendingPlayerRemovals;
+	std::mutex _pendingTextureWorkMutex;
 	std::wstring _buffer;
 	std::vector<ArcadeMachine> _machines;
 	std::vector<ElevatorMachine> _elevators;
@@ -193,7 +200,12 @@ private:
 	void _showEmoteBubble(unsigned player, const std::string &msg);
 	void _renderEmoteBubbles();
 	void _showTextBubble(unsigned player, const std::string &msg);
+	void _buildTextBubble(unsigned player, const std::string &msg);
 	void _renderTextBubbles();
+	void _queuePlayerName(unsigned player, const std::string &name);
+	void _queuePlayerRemoval(unsigned player);
+	void _buildPlayerName(unsigned player, const std::string &name);
+	void _processPendingTextureWork();
 	void _logChatToFile(unsigned player, const std::string &msg);
 	void _inputBoxUpdate();
 	void _updateEmotePicker();

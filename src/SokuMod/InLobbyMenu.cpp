@@ -369,15 +369,7 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		this->_disconnected = true;
 	};
 	this->_connection->onPlayerJoin = [this](const Player &r){
-		SokuLib::Vector2i size;
-		int texId = 0;
-
-		if (!createTextTexture(texId, convertEncoding<char, wchar_t, UTF8Decode, UTF16Encode>(r.name).c_str(), lobbyData->getFont(16), {200, 20}, &size))
-			puts("Error creating text texture");
-		this->_extraPlayerData[r.id].name.texture.setHandle(texId, {200, 20});
-		this->_extraPlayerData[r.id].name.setSize(size.to<unsigned>());
-		this->_extraPlayerData[r.id].name.rect.width = size.x;
-		this->_extraPlayerData[r.id].name.rect.height = size.y;
+		this->_queuePlayerName(r.id, r.name);
 	};
 	this->_connection->onPlayerLeave = [this](const Player &r){
 		{
@@ -385,10 +377,7 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 			if (this->_recentOpponent && this->_recentOpponent->playerId == r.id)
 				this->_recentOpponent.reset();
 		}
-		std::lock_guard<std::mutex> lock(this->_playerEmoteBubblesMutex);
-		this->_playerEmoteBubbles.erase(r.id);
-		std::lock_guard<std::mutex> textLock(this->_playerTextBubblesMutex);
-		this->_playerTextBubbles.erase(r.id);
+		this->_queuePlayerRemoval(r.id);
 	};
 	this->_connection->onConnect = [this](const Lobbies::PacketOlleh &r){
 		auto &bg = lobbyData->backgrounds[r.bg];
@@ -425,22 +414,8 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		this->_connection->getMe()->pos.x = bg.startX;
 		this->_connection->getMe()->pos.y = bg.platforms[bg.startPlatform].pos.y;
 
-		SokuLib::Vector2i size;
-		int texId = 0;
-
 		this->_roomName = std::string(r.name, strnlen(r.name, sizeof(r.name)));
-		if (!createTextTexture(
-			texId,
-			convertEncoding<char, wchar_t, UTF8Decode, UTF16Encode>(std::string(r.realName, strnlen(r.realName, sizeof(r.realName)))).c_str(),
-			lobbyData->getFont(16),
-			{200, 20},
-			&size
-		))
-			puts("Error creating text texture");
-		this->_extraPlayerData[r.id].name.texture.setHandle(texId, {200, 20});
-		this->_extraPlayerData[r.id].name.setSize(size.to<unsigned>());
-		this->_extraPlayerData[r.id].name.rect.width = size.x;
-		this->_extraPlayerData[r.id].name.rect.height = size.y;
+		this->_queuePlayerName(r.id, std::string(r.realName, strnlen(r.realName, sizeof(r.realName))));
 		this->_music = "data/bgm/" + std::string(r.music, strnlen(r.music, sizeof(r.music))) + ".ogg";
 		SokuLib::playBGM(this->_music.c_str());
 		if (!hasIpv6Map())
@@ -1130,6 +1105,7 @@ int InLobbyMenu::onRender()
 			this->_loadingGear.draw();
 			return 0;
 		}
+		this->_processPendingTextureWork();
 
 		auto &bg = lobbyData->backgrounds[this->_background];
 
@@ -1527,7 +1503,10 @@ int InLobbyMenu::onRender()
 
 		lastTexts.reserve(this->_playersCopy.size());
 		for (auto &player : this->_playersCopy) {
-			auto &name = this->_extraPlayerData[player.id].name;
+			auto playerData = this->_extraPlayerData.find(player.id);
+			if (playerData == this->_extraPlayerData.end())
+				continue;
+			auto &name = playerData->second.name;
 			auto minPos = this->_translate.x + player.pos.x * this->_zoom - name.getSize().x / 2.f;
 			auto maxPos = this->_translate.x + player.pos.x * this->_zoom + name.getSize().x / 2.f;
 			auto posY = this->_translate.y + (player.pos.y - 120) * this->_zoom;
@@ -1600,6 +1579,96 @@ void InLobbyMenu::_addMessageToList(unsigned int channel, unsigned player, const
 	std::lock_guard<std::mutex> lock(this->_chatMessagesMutex);
 	this->_chatMessages.emplace_front();
 	this->_chatMessages.front().lazy_message.emplace(channel, player, msg, colorOverride);
+}
+
+void InLobbyMenu::_queuePlayerName(unsigned player, const std::string &name)
+{
+	std::lock_guard<std::mutex> lock(this->_pendingTextureWorkMutex);
+	if (this->_pendingPlayerNames.find(player) == this->_pendingPlayerNames.end())
+		this->_pendingPlayerNameOrder.push(player);
+	this->_pendingPlayerNames[player] = name;
+}
+
+void InLobbyMenu::_queuePlayerRemoval(unsigned player)
+{
+	std::lock_guard<std::mutex> lock(this->_pendingTextureWorkMutex);
+	this->_pendingPlayerRemovals.insert(player);
+	this->_pendingPlayerNames.erase(player);
+	this->_pendingTextBubbles.erase(player);
+}
+
+void InLobbyMenu::_buildPlayerName(unsigned player, const std::string &name)
+{
+	SokuLib::Vector2i size;
+	int texId = 0;
+	std::wstring decoded;
+
+	try {
+		decoded = convertEncoding<char, wchar_t, UTF8Decode, UTF16Encode>(name);
+	} catch (...) {
+		return;
+	}
+	if (!createTextTexture(texId, decoded.c_str(), lobbyData->getFont(16), {200, 20}, &size)) {
+		puts("Error creating player name texture");
+		return;
+	}
+	auto &sprite = this->_extraPlayerData[player].name;
+	sprite.texture.setHandle(texId, {200, 20});
+	sprite.setSize(size.to<unsigned>());
+	sprite.rect.width = size.x;
+	sprite.rect.height = size.y;
+}
+
+void InLobbyMenu::_processPendingTextureWork()
+{
+	constexpr unsigned playerNamesPerFrame = 2;
+	constexpr unsigned textBubblesPerFrame = 2;
+	std::set<uint32_t> removals;
+	std::vector<std::pair<uint32_t, std::string>> playerNames;
+	std::vector<std::pair<uint32_t, std::string>> textBubbles;
+	{
+		std::lock_guard<std::mutex> lock(this->_pendingTextureWorkMutex);
+
+		removals.swap(this->_pendingPlayerRemovals);
+		for (unsigned i = 0; i < playerNamesPerFrame && !this->_pendingPlayerNameOrder.empty();) {
+			auto player = this->_pendingPlayerNameOrder.front();
+			this->_pendingPlayerNameOrder.pop();
+			auto work = this->_pendingPlayerNames.find(player);
+			if (work == this->_pendingPlayerNames.end())
+				continue;
+			playerNames.emplace_back(work->first, std::move(work->second));
+			this->_pendingPlayerNames.erase(work);
+			i++;
+		}
+		for (unsigned i = 0; i < textBubblesPerFrame && !this->_pendingTextBubbleOrder.empty();) {
+			auto player = this->_pendingTextBubbleOrder.front();
+			this->_pendingTextBubbleOrder.pop();
+			auto work = this->_pendingTextBubbles.find(player);
+			if (work == this->_pendingTextBubbles.end())
+				continue;
+			textBubbles.emplace_back(work->first, std::move(work->second));
+			this->_pendingTextBubbles.erase(work);
+			i++;
+		}
+	}
+	if (!removals.empty()) {
+		{
+			std::lock_guard<std::mutex> lock(this->_playerEmoteBubblesMutex);
+			for (auto player : removals)
+				this->_playerEmoteBubbles.erase(player);
+		}
+		{
+			std::lock_guard<std::mutex> lock(this->_playerTextBubblesMutex);
+			for (auto player : removals)
+				this->_playerTextBubbles.erase(player);
+		}
+		for (auto player : removals)
+			this->_extraPlayerData.erase(player);
+	}
+	for (const auto &[player, name] : playerNames)
+		this->_buildPlayerName(player, name);
+	for (const auto &[player, msg] : textBubbles)
+		this->_buildTextBubble(player, msg);
 }
 
 void InLobbyMenu::_showEmoteBubble(unsigned player, const std::string &msg)
@@ -1697,6 +1766,14 @@ void InLobbyMenu::_showTextBubble(unsigned player, const std::string &msg)
 {
 	if (!showTextBubbles || player == 0)
 		return;
+	std::lock_guard<std::mutex> lock(this->_pendingTextureWorkMutex);
+	if (this->_pendingTextBubbles.find(player) == this->_pendingTextBubbles.end())
+		this->_pendingTextBubbleOrder.push(player);
+	this->_pendingTextBubbles[player] = msg;
+}
+
+void InLobbyMenu::_buildTextBubble(unsigned player, const std::string &msg)
+{
 	auto bodyStart = msg.find("]: ");
 	if (bodyStart == std::string::npos)
 		return;
@@ -1728,30 +1805,16 @@ void InLobbyMenu::_showTextBubble(unsigned player, const std::string &msg)
 
 	constexpr int maxTextWidth = 260;
 	auto &bubbleFont = this->_textBubbleFont;
-	auto popCodepoint = [](std::wstring &value) {
-		if (value.empty())
-			return;
-		value.pop_back();
-		if (!value.empty() && value.back() >= 0xD800 && value.back() <= 0xDBFF)
-			value.pop_back();
-	};
-	auto fits = [&](const std::wstring &value) {
-		return getTextSize(value.c_str(), bubbleFont, {512, 28}, true).x <= maxTextWidth;
+	auto avoidSplitSurrogate = [](const std::wstring &value, size_t fit) {
+		if (fit && fit < value.size() && value[fit - 1] >= 0xD800 && value[fit - 1] <= 0xDBFF)
+			fit--;
+		return fit;
 	};
 	std::wstring lines[2];
-	if (fits(text))
+	auto fit = avoidSplitSurrogate(text, getTextFit(text.c_str(), bubbleFont, maxTextWidth, true));
+	if (fit >= text.size())
 		lines[0] = text;
 	else {
-		size_t fit = 0;
-		for (size_t i = 0; i < text.size();) {
-			auto next = i + 1;
-			if (text[i] >= 0xD800 && text[i] <= 0xDBFF && next < text.size() && text[next] >= 0xDC00 && text[next] <= 0xDFFF)
-				next++;
-			if (!fits(text.substr(0, next)))
-				break;
-			fit = next;
-			i = next;
-		}
 		if (!fit)
 			fit = text.size() >= 2 && text[0] >= 0xD800 && text[0] <= 0xDBFF && text[1] >= 0xDC00 && text[1] <= 0xDFFF ? 2 : 1;
 		auto breakAt = text.find_last_of(L" \t", fit - 1);
@@ -1760,9 +1823,11 @@ void InLobbyMenu::_showTextBubble(unsigned player, const std::string &msg)
 		lines[0] = text.substr(0, fit);
 		lines[1] = text.substr(fit);
 		lines[1].erase(lines[1].begin(), std::find_if(lines[1].begin(), lines[1].end(), [](wchar_t c) { return !std::iswspace(c); }));
-		if (!fits(lines[1])) {
-			while (!lines[1].empty() && !fits(lines[1] + L"..."))
-				popCodepoint(lines[1]);
+		auto secondFit = avoidSplitSurrogate(lines[1], getTextFit(lines[1].c_str(), bubbleFont, maxTextWidth, true));
+		if (secondFit < lines[1].size()) {
+			auto ellipsisWidth = getTextSize(L"...", bubbleFont, {maxTextWidth, 28}, true).x;
+			secondFit = avoidSplitSurrogate(lines[1], getTextFit(lines[1].c_str(), bubbleFont, maxTextWidth - ellipsisWidth, true));
+			lines[1].resize(secondFit);
 			lines[1] += L"...";
 		}
 	}
@@ -1770,11 +1835,17 @@ void InLobbyMenu::_showTextBubble(unsigned player, const std::string &msg)
 	unsigned lineCount = lines[1].empty() ? 1 : 2;
 	SokuLib::Vector2i textSizes[2]{};
 	int textureIds[2]{};
-	for (unsigned i = 0; i < lineCount; i++)
-		if (!createTextTexture(textureIds[i], lines[i].c_str(), bubbleFont, {maxTextWidth, 28}, &textSizes[i], true))
+	for (unsigned i = 0; i < lineCount; i++) {
+		if (!createTextTexture(textureIds[i], lines[i].c_str(), bubbleFont, {maxTextWidth, 28}, &textSizes[i], true)) {
+			for (unsigned j = 0; j < i; j++)
+				SokuLib::textureMgr.remove(textureIds[j]);
 			return;
+		}
+	}
 	std::lock_guard<std::mutex> lock(this->_playerTextBubblesMutex);
 	auto &bubble = this->_playerTextBubbles[player];
+	for (unsigned i = lineCount; i < bubble.lineCount; i++)
+		bubble.text[i].texture.destroy();
 	for (unsigned i = 0; i < lineCount; i++) {
 		bubble.text[i].texture.setHandle(textureIds[i], {maxTextWidth, 28});
 		bubble.text[i].rect.left = 0;
@@ -2675,7 +2746,6 @@ void InLobbyMenu::renderChat()
 					txt.pos.x = startPos;
 					if (!m->emotes.empty())
 						txt.pos.y = (txt.realSize.y - EMOTE_SIZE) / 2;
-					printf("Created sprite %x %i,%i %ux%u (%ux%u) %08x\n", texId, txt.pos.x, txt.pos.y, txt.realSize.x, txt.realSize.y, txt.sprite.texture.getSize().x, txt.sprite.texture.getSize().y, txt.sprite.tint.operator unsigned());
 					startPos = pos;
 					line.clear();
 				};
