@@ -189,6 +189,7 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
 		ws2_32
 		d3dx9
 		imm32
+		ole32
 		version
 		CURL::libcurl
 		mbedtls_shim

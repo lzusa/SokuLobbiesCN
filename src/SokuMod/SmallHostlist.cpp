@@ -4,7 +4,10 @@
 
 #define _USE_MATH_DEFINES
 #include <algorithm>
+#include <cwchar>
 #include <filesystem>
+#include <mlang.h>
+#include <objbase.h>
 
 #include "nlohmann/json.hpp"
 #include "data.hpp"
@@ -34,22 +37,144 @@ static bool decodeCodePage(const std::string &input, unsigned codePage, DWORD fl
 	return true;
 }
 
-static std::wstring decodeHostlistName(const std::string &input, const std::string &country)
+static bool encodeCodePageExact(const std::wstring &input, unsigned codePage, std::string &output)
 {
-	std::wstring result;
+	if (input.empty()) {
+		output.clear();
+		return true;
+	}
+	BOOL usedDefault = FALSE;
+	auto size = WideCharToMultiByte(codePage, WC_NO_BEST_FIT_CHARS, input.data(), static_cast<int>(input.size()), nullptr, 0, nullptr, &usedDefault);
+	if (!size || usedDefault)
+		return false;
+	output.resize(size);
+	usedDefault = FALSE;
+	if (!WideCharToMultiByte(codePage, WC_NO_BEST_FIT_CHARS, input.data(), static_cast<int>(input.size()), output.data(), size, nullptr, &usedDefault) || usedDefault) {
+		output.clear();
+		return false;
+	}
+	return true;
+}
 
-	// Hostlist JSON is UTF-8. Legacy clients may still publish names in their local code page.
-	if (decodeCodePage(input, CP_UTF8, MB_ERR_INVALID_CHARS, result))
-		return result;
-	if (country == "cn" && decodeCodePage(input, 936, 0, result))
-		return result;
-	if ((country == "tw" || country == "hk") && decodeCodePage(input, 950, 0, result))
-		return result;
-	if (decodeCodePage(input, 932, 0, result))
-		return result;
-	if (decodeCodePage(input, 936, 0, result))
-		return result;
-	return L"\uFFFD";
+static unsigned detectCodePage(const std::string &input)
+{
+	HRESULT initResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+	CLSID classId;
+	IID interfaceId;
+	IMultiLanguage2 *multiLanguage = nullptr;
+	unsigned result = 0;
+
+	if (
+		FAILED(CLSIDFromString(L"{275C23E2-3747-11D0-9FEA-00AA003F8646}", &classId)) ||
+		FAILED(IIDFromString(L"{DCCFC164-2B38-11D2-B7EC-00C04F8F5D9A}", &interfaceId)) ||
+		FAILED(CoCreateInstance(classId, nullptr, CLSCTX_INPROC_SERVER, interfaceId, reinterpret_cast<void **>(&multiLanguage)))
+	) {
+		if (SUCCEEDED(initResult))
+			CoUninitialize();
+		return 0;
+	}
+
+	DetectEncodingInfo detections[16]{};
+	INT sourceSize = static_cast<INT>(input.size());
+	INT detectionCount = sizeof(detections) / sizeof(*detections);
+	if (SUCCEEDED(multiLanguage->DetectInputCodepage(MLDETECTCP_NONE, 0, const_cast<char *>(input.data()), &sourceSize, detections, &detectionCount))) {
+		for (INT i = 0; i < detectionCount; i++) {
+			if (detections[i].nCodePage != 932 && detections[i].nCodePage != 936 && detections[i].nCodePage != 950 && detections[i].nCodePage != 54936)
+				continue;
+			result = detections[i].nCodePage;
+			break;
+		}
+	}
+	multiLanguage->Release();
+	if (SUCCEEDED(initResult))
+		CoUninitialize();
+	return result;
+}
+
+static bool hasMojibakeSignature(const std::wstring &input)
+{
+	unsigned halfwidthKana = 0;
+	unsigned nonAscii = 0;
+
+	for (auto c : input) {
+		nonAscii += c >= 0x80;
+		halfwidthKana += c >= 0xFF61 && c <= 0xFF9F;
+	}
+	return halfwidthKana >= 2 && halfwidthKana * 2 >= nonAscii;
+}
+
+static int scoreDecodedName(const std::wstring &input, unsigned &ideographs)
+{
+	// A compact frequency set is only a tie-breaker. Invalid conversions are rejected by
+	// strict decoding and exact round trips before this score is considered.
+	static constexpr const wchar_t *commonIdeographs =
+		L"\u7684\u4e00\u662f\u4e0d\u4e86\u4eba\u6211\u5728\u6709\u4ed6\u8fd9\u4e3a\u4e4b\u5927\u6765\u4ee5\u4e2a\u4e2d\u4e0a"
+		L"\u4eec\u5230\u8bf4\u56fd\u548c\u5730\u4e5f\u5b50\u65f6\u9053\u51fa\u800c\u8981\u4e8e\u5c31\u4e0b\u5f97\u53ef\u4f60\u5e74\u751f\u81ea"
+		L"\u4f1a\u90a3\u540e\u80fd\u5bf9\u7740\u4e8b\u5176\u91cc\u6240\u53bb\u884c\u8fc7\u5bb6\u5341\u7528\u53d1\u5929\u5982\u7136\u4f5c\u65b9"
+		L"\u6210\u8005\u591a\u65e5\u90fd\u4e09\u5c0f\u4e8c\u65e0\u540c\u7ecf\u6cd5\u5f53\u8d77\u4e0e\u597d\u770b\u5b66\u8fdb\u79cd\u5c06\u8fd8\u5206"
+		L"\u5fc3\u524d\u9762\u53c8\u5b9a\u89c1\u53ea\u4e3b\u6ca1\u516c\u4ece\u5df2\u77e5\u5168\u73b0\u60c5\u660e\u60f3\u5916\u95f4\u6837\u672c\u9c7c"
+		L"\u732b\u7ed8\u7b14\u6c5f\u5357\u73e0\u6d32\u5c9b\u6816\u4fe1\u98d8\u51f9\u627f\u8bfa\u54b8\u4ed3\u9f20\u795e\u7ea2\u5e08\u5085\u5f00\u9501";
+	int score = 0;
+	ideographs = 0;
+	for (auto c : input) {
+		if (c < 0x80) {
+			if (c >= 0x20 && c != 0x7F)
+				score++;
+			else
+				score -= 20;
+		} else if (c >= 0xFF61 && c <= 0xFF9F)
+			score += 2;
+		else if ((c >= 0x3040 && c <= 0x30FF))
+			score += 4;
+		else if ((c >= 0x3400 && c <= 0x9FFF)) {
+			ideographs++;
+			score += std::wcschr(commonIdeographs, c) ? 6 : 1;
+		} else if (c == 0xFFFD || c < 0x20)
+			score -= 20;
+		else
+			score--;
+	}
+	return score;
+}
+
+static std::wstring decodeHostlistName(const std::string &input)
+{
+	std::wstring utf8Result;
+
+	if (!decodeCodePage(input, CP_UTF8, MB_ERR_INVALID_CHARS, utf8Result)) {
+		auto codePage = detectCodePage(input);
+		if (codePage && decodeCodePage(input, codePage, MB_ERR_INVALID_CHARS, utf8Result))
+			return utf8Result;
+		if (decodeCodePage(input, 932, MB_ERR_INVALID_CHARS, utf8Result))
+			return utf8Result;
+		return L"\uFFFD";
+	}
+	if (!hasMojibakeSignature(utf8Result))
+		return utf8Result;
+
+	std::string originalBytes;
+	if (!encodeCodePageExact(utf8Result, 932, originalBytes))
+		return utf8Result;
+
+	unsigned originalIdeographs;
+	auto originalScore = scoreDecodedName(utf8Result, originalIdeographs);
+	std::wstring best = utf8Result;
+	auto bestScore = originalScore;
+	for (auto codePage : {936U, 950U}) {
+		std::wstring candidate;
+		std::string roundTrip;
+		if (!decodeCodePage(originalBytes, codePage, MB_ERR_INVALID_CHARS, candidate))
+			continue;
+		if (!encodeCodePageExact(candidate, codePage, roundTrip) || roundTrip != originalBytes)
+			continue;
+		unsigned candidateIdeographs;
+		auto candidateScore = scoreDecodedName(candidate, candidateIdeographs);
+		if (candidateIdeographs >= 2 && candidateScore > bestScore + 3) {
+			best = std::move(candidate);
+			bestScore = candidateScore;
+		}
+	}
+	return best;
 }
 
 static std::wstring limitWideStr(const std::wstring &str, unsigned limit)
@@ -500,8 +625,8 @@ void SmallHostlist::_refreshHostlist()
 				entry->p2chr = j["client_character"];
 				entry->country1 = j["host_country"];
 				entry->country2 = j["client_country"];
-				entry->namesStr = limitWideStr(decodeHostlistName(j["host_name"].get<std::string>(), entry->country1), 10) +
-					L"|" + limitWideStr(decodeHostlistName(j["client_name"].get<std::string>(), entry->country2), 10);
+				entry->namesStr = limitWideStr(decodeHostlistName(j["host_name"].get<std::string>()), 10) +
+					L"|" + limitWideStr(decodeHostlistName(j["client_name"].get<std::string>()), 10);
 				entry->ip = j["ip"];
 				entry->port = std::stoul(entry->ip.substr(entry->ip.find_last_of(':') + 1));
 				entry->ip = entry->ip.substr(0, entry->ip.find_last_of(':'));
