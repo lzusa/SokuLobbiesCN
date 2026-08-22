@@ -280,6 +280,7 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 
 	this->_chatFont.create();
 	this->_chatFont.setIndirect(desc);
+	this->_initQuickMessageSprites();
 
 	for (int i = 0; i < 3; i++) {
 		const char *paths[3] = {
@@ -724,7 +725,11 @@ int InLobbyMenu::onProcess()
 				messageBox->active = false;
 			}
 		}
-		if (SokuLib::checkKeyOneshot(DIK_ESCAPE, 0, 0, 0) && !this->_emotePickerClosedThisFrame) {
+		if (
+			SokuLib::checkKeyOneshot(DIK_ESCAPE, 0, 0, 0) &&
+			!this->_emotePickerClosedThisFrame &&
+			!this->_quickMessageMenuClosedThisFrame
+		) {
 			playSound(0x29);
 			if (!this->_editingText) {
 				meMutexLock.unlock();
@@ -1715,13 +1720,23 @@ void InLobbyMenu::_inputBoxUpdate()
 		return;
 	std::lock_guard<std::mutex> lock_(this->keyTimersMutex);
 	this->_emotePickerClosedThisFrame = false;
+	this->_quickMessageMenuClosedThisFrame = false;
 	if (this->_emotePickerOpen) {
 		this->_updateEmotePicker();
+		goto ret_reset_keysPressed;
+	}
+	if (this->_quickMessageMenuOpen) {
+		this->_updateQuickMessageMenu();
 		goto ret_reset_keysPressed;
 	}
 	if (!this->_editingText && this->keysPressed[VK_F1]) {
 		this->_emotePickerOpen = true;
 		this->_normalizeEmotePickerSelection();
+		playSound(0x28);
+		goto ret_reset_keysPressed;
+	}
+	if (!this->_editingText && this->keysPressed[VK_F2]) {
+		this->_quickMessageMenuOpen = true;
 		playSound(0x28);
 		goto ret_reset_keysPressed;
 	}
@@ -1873,6 +1888,12 @@ void InLobbyMenu::_normalizeEmotePickerSelection()
 void InLobbyMenu::_updateEmotePicker()
 {
 	this->_normalizeEmotePickerSelection();
+	if (this->keysPressed[VK_F2]) {
+		this->_emotePickerOpen = false;
+		this->_quickMessageMenuOpen = true;
+		playSound(0x27);
+		return;
+	}
 	if (this->keysPressed[VK_F1] || this->keysPressed[VK_ESCAPE]) {
 		this->_emotePickerOpen = false;
 		this->_emotePickerClosedThisFrame = this->keysPressed[VK_ESCAPE];
@@ -1930,6 +1951,55 @@ void InLobbyMenu::_updateEmotePicker()
 			this->_emotePickerOpen = false;
 			playSound(0x28);
 		}
+	}
+}
+
+void InLobbyMenu::_updateQuickMessageMenu()
+{
+	if (this->keysPressed[VK_F1]) {
+		this->_quickMessageMenuOpen = false;
+		this->_emotePickerOpen = true;
+		this->_normalizeEmotePickerSelection();
+		playSound(0x27);
+		return;
+	}
+	if (this->keysPressed[VK_F2] || this->keysPressed[VK_ESCAPE]) {
+		this->_quickMessageMenuOpen = false;
+		this->_quickMessageMenuClosedThisFrame = this->keysPressed[VK_ESCAPE];
+		playSound(0x29);
+		return;
+	}
+	for (unsigned i = 0; i < 9; i++) {
+		if (!this->keysPressed['1' + i] && !this->keysPressed[VK_NUMPAD1 + i])
+			continue;
+		if (quickMessages[i].empty())
+			playSound(0x29);
+		else {
+			this->_sendMessage(quickMessages[i]);
+			this->_quickMessageMenuOpen = false;
+			playSound(0x28);
+		}
+		return;
+	}
+}
+
+void InLobbyMenu::_initQuickMessageSprites()
+{
+	for (unsigned i = 0; i < 9; i++) {
+		std::wstring label = std::to_wstring(i + 1) + L". " + (quickMessages[i].empty() ? L"(not configured)" : quickMessages[i]);
+		int textureId = 0;
+
+		if (!createTextTexture(textureId, label.c_str(), this->_chatFont, {360, 24}, &this->_quickMessageTextSizes[i]))
+			continue;
+		this->_quickMessageSprites[i].texture.setHandle(textureId, {360, 24});
+		this->_quickMessageSprites[i].rect.width = this->_quickMessageTextSizes[i].x;
+		this->_quickMessageSprites[i].rect.height = this->_quickMessageTextSizes[i].y;
+		this->_quickMessageSprites[i].setSize({
+			static_cast<unsigned>(this->_quickMessageTextSizes[i].x),
+			static_cast<unsigned>(this->_quickMessageTextSizes[i].y)
+		});
+		if (quickMessages[i].empty())
+			this->_quickMessageSprites[i].tint = SokuLib::Color{0x80, 0x80, 0x80, 0xFF};
 	}
 }
 
@@ -2516,6 +2586,8 @@ void InLobbyMenu::renderChat()
 	}
 	if (this->_emotePickerOpen)
 		this->_renderEmotePicker();
+	if (this->_quickMessageMenuOpen)
+		this->_renderQuickMessageMenu();
 }
 
 void InLobbyMenu::_renderEmotePicker()
@@ -2591,9 +2663,32 @@ void InLobbyMenu::_renderEmotePicker()
 	text.draw();
 }
 
+void InLobbyMenu::_renderQuickMessageMenu()
+{
+	constexpr int panelX = 132;
+	constexpr int panelY = 82;
+	constexpr int panelWidth = 376;
+	constexpr int panelHeight = 303;
+	constexpr int padding = 12;
+	SokuLib::DrawUtils::RectangleShape panel;
+
+	panel.setPosition({panelX, panelY});
+	panel.setSize({panelWidth, panelHeight});
+	panel.setBorderColor(SokuLib::Color{0x80, 0x88, 0x98, 0xFF});
+	panel.setFillColor(SokuLib::Color{0x12, 0x16, 0x20, 0xE8});
+	panel.draw();
+	for (unsigned i = 0; i < 9; i++) {
+		this->_quickMessageSprites[i].setPosition({
+			panelX + padding,
+			panelY + padding + static_cast<int>(i) * 31
+		});
+		this->_quickMessageSprites[i].draw();
+	}
+}
+
 bool InLobbyMenu::isInputing()
 {
-	return this->_editingText || this->_emotePickerOpen;
+	return this->_editingText || this->_emotePickerOpen || this->_quickMessageMenuOpen;
 }
 
 bool InLobbyMenu::isEmotePickerOpen() const

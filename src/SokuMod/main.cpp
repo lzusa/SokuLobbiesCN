@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cwctype>
+#include <filesystem>
 #include <SokuLib.hpp>
 #include <shlwapi.h>
 #include "data.hpp"
@@ -50,6 +51,98 @@ static int (SokuLib::LoadingServer::*og_LoadingServerOnRender)();
 static int (SokuLib::BattleManager::*og_BattleMgrOnProcess)();
 static void (SokuLib::KeymapManager::*s_origKeymapManager_SetInputs)();
 
+static std::wstring decodeIniText(const std::string &bytes)
+{
+	if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF && static_cast<unsigned char>(bytes[1]) == 0xFE) {
+		std::wstring result;
+
+		result.reserve((bytes.size() - 2) / 2);
+		for (size_t i = 2; i + 1 < bytes.size(); i += 2)
+			result += static_cast<wchar_t>(static_cast<unsigned char>(bytes[i]) | (static_cast<unsigned char>(bytes[i + 1]) << 8));
+		return result;
+	}
+	if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFE && static_cast<unsigned char>(bytes[1]) == 0xFF) {
+		std::wstring result;
+
+		result.reserve((bytes.size() - 2) / 2);
+		for (size_t i = 2; i + 1 < bytes.size(); i += 2)
+			result += static_cast<wchar_t>((static_cast<unsigned char>(bytes[i]) << 8) | static_cast<unsigned char>(bytes[i + 1]));
+		return result;
+	}
+
+	size_t offset = bytes.size() >= 3 &&
+		static_cast<unsigned char>(bytes[0]) == 0xEF &&
+		static_cast<unsigned char>(bytes[1]) == 0xBB &&
+		static_cast<unsigned char>(bytes[2]) == 0xBF ? 3 : 0;
+	auto decode = [&](unsigned codePage, DWORD flags) {
+		std::wstring result;
+		auto size = MultiByteToWideChar(codePage, flags, bytes.data() + offset, static_cast<int>(bytes.size() - offset), nullptr, 0);
+
+		if (!size)
+			return result;
+		result.resize(size);
+		if (!MultiByteToWideChar(codePage, flags, bytes.data() + offset, static_cast<int>(bytes.size() - offset), result.data(), size))
+			result.clear();
+		return result;
+	};
+	auto result = decode(CP_UTF8, MB_ERR_INVALID_CHARS);
+
+	return result.empty() && bytes.size() != offset ? decode(CP_ACP, 0) : result;
+}
+
+static void loadQuickMessages()
+{
+	const wchar_t *defaults[9] = {
+		L"Good game!", L"Thanks for playing!", L"Please wait a moment.", L"Let's play again!",
+		L"", L"", L"", L"", L""
+	};
+	for (unsigned i = 0; i < 9; i++)
+		quickMessages[i] = defaults[i];
+
+	std::ifstream file(std::filesystem::path(profilePath), std::ios::binary);
+	if (!file)
+		return;
+	std::string bytes{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+	std::wistringstream stream(decodeIniText(bytes));
+	std::wstring line;
+	bool inLobbySection = false;
+	auto trim = [](std::wstring &value) {
+		value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](wchar_t c) { return !std::iswspace(c); }));
+		value.erase(std::find_if(value.rbegin(), value.rend(), [](wchar_t c) { return !std::iswspace(c); }).base(), value.end());
+	};
+
+	while (std::getline(stream, line)) {
+		if (!line.empty() && line.back() == L'\r')
+			line.pop_back();
+		std::wstring parsed = line;
+		trim(parsed);
+		if (parsed.empty() || parsed[0] == L';' || parsed[0] == L'#')
+			continue;
+		if (parsed.front() == L'[' && parsed.back() == L']') {
+			auto section = parsed.substr(1, parsed.size() - 2);
+			trim(section);
+			inLobbySection = _wcsicmp(section.c_str(), L"Lobby") == 0;
+			continue;
+		}
+		if (!inLobbySection)
+			continue;
+		auto separator = parsed.find(L'=');
+		if (separator == std::wstring::npos)
+			continue;
+		auto key = parsed.substr(0, separator);
+		auto value = parsed.substr(separator + 1);
+		trim(key);
+		trim(value);
+		for (unsigned i = 0; i < 9; i++) {
+			auto expected = L"QuickMessage" + std::to_wstring(i + 1);
+			if (_wcsicmp(key.c_str(), expected.c_str()) == 0) {
+				quickMessages[i] = value.substr(0, 512);
+				break;
+			}
+		}
+	}
+}
+
 LARGE_INTEGER timer_frequency;
 unsigned &currentFrame = *(unsigned *)0x8985D8;
 unsigned char soku2Major = 0;
@@ -64,6 +157,7 @@ char redirectIp[64];
 char *wineVersion = nullptr;
 unsigned hostPref;
 unsigned chatKey;
+std::wstring quickMessages[9];
 unsigned lobbyJoinTries;
 unsigned lobbyJoinInterval;
 unsigned maxChatMessages;
@@ -1122,6 +1216,7 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE hPar
 	servPort = GetPrivateProfileIntW(L"Lobby", L"Port", 5254, profilePath);
 	hostPort = GetPrivateProfileIntW(L"Lobby", L"HostPort", 10800, profilePath);
 	chatKey = GetPrivateProfileIntW(L"Lobby", L"ChatKey", VK_RETURN, profilePath);
+	loadQuickMessages();
 	lobbyJoinTries = GetPrivateProfileIntW(L"Lobby", L"JoinTries", 15, profilePath);
 	lobbyJoinInterval = GetPrivateProfileIntW(L"Lobby", L"JoinInterval", 1, profilePath);
 	maxChatMessages = GetPrivateProfileIntW(L"Lobby", L"MaxChatMessages", 100, profilePath);

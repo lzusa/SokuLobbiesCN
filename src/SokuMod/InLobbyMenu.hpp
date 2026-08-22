@@ -163,6 +163,10 @@ private:
 	bool _emotePickerClosedThisFrame = false;
 	bool _emotePickerNavigationHeld = false;
 	unsigned _emotePickerSelection = 0;
+	bool _quickMessageMenuOpen = false;
+	bool _quickMessageMenuClosedThisFrame = false;
+	SokuLib::DrawUtils::Sprite _quickMessageSprites[9];
+	SokuLib::Vector2i _quickMessageTextSizes[9];
 	std::map<unsigned, int> _textSize;
 
 	void _updateMessageSprite(SokuLib::Vector2i pos, unsigned int remaining, SokuLib::Vector2i realSize, SokuLib::DrawUtils::Sprite &sprite, unsigned char alpha);
@@ -173,6 +177,9 @@ private:
 	void _inputBoxUpdate();
 	void _updateEmotePicker();
 	void _renderEmotePicker();
+	void _updateQuickMessageMenu();
+	void _renderQuickMessageMenu();
+	void _initQuickMessageSprites();
 	void _sendEmote(const LobbyData::Emote &emote);
 	void _normalizeEmotePickerSelection();
 	void _initInputBox();

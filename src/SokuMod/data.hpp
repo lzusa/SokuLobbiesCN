@@ -8,6 +8,7 @@
 
 #include <windows.h>
 #include <map>
+#include <string>
 #include <functional>
 
 struct Character {
@@ -29,6 +30,7 @@ extern unsigned maxChatMessages;
 extern unsigned opponentChatColor;
 extern unsigned hostPref;
 extern unsigned chatKey;
+extern std::wstring quickMessages[9];
 extern unsigned short servPort;
 extern unsigned short hostPort;
 extern bool hasSoku2;
