@@ -992,6 +992,26 @@ void loadSoku2Config()
 static void __fastcall KeymapManagerSetInputs(SokuLib::KeymapManager *This)
 {
 	(This->*s_origKeymapManager_SetInputs)();
+	if (activeMenu && activeMenu->isEmotePickerOpen()) {
+		std::lock_guard<std::mutex> lock(activeMenu->keyTimersMutex);
+
+		if (This->input.horizontalAxis == -1)
+			activeMenu->keysPressed[VK_LEFT] = true;
+		else if (This->input.horizontalAxis == 1)
+			activeMenu->keysPressed[VK_RIGHT] = true;
+		if (This->input.verticalAxis == -1)
+			activeMenu->keysPressed[VK_UP] = true;
+		else if (This->input.verticalAxis == 1)
+			activeMenu->keysPressed[VK_DOWN] = true;
+		if (This->input.a == 1)
+			activeMenu->keysPressed[VK_RETURN] = true;
+		if (This->input.b == 1)
+			activeMenu->keysPressed[VK_ESCAPE] = true;
+		if (This->input.changeCard == 1)
+			activeMenu->keysPressed[VK_PRIOR] = true;
+		if (This->input.spellcard == 1)
+			activeMenu->keysPressed[VK_NEXT] = true;
+	}
 	if (
 		(activeMenu && activeMenu->isInputing()) ||
 		(wasBlocking && (

@@ -159,6 +159,10 @@ private:
 	int _selectionStart = -1;
 	int _selectionEnd = -1;
 	bool _editingText = false;
+	bool _emotePickerOpen = false;
+	bool _emotePickerClosedThisFrame = false;
+	bool _emotePickerNavigationHeld = false;
+	unsigned _emotePickerSelection = 0;
 	std::map<unsigned, int> _textSize;
 
 	void _updateMessageSprite(SokuLib::Vector2i pos, unsigned int remaining, SokuLib::Vector2i realSize, SokuLib::DrawUtils::Sprite &sprite, unsigned char alpha);
@@ -167,6 +171,10 @@ private:
 	void _clearRecentOpponent();
 	void _logChatToFile(unsigned player, const std::string &msg);
 	void _inputBoxUpdate();
+	void _updateEmotePicker();
+	void _renderEmotePicker();
+	void _sendEmote(const LobbyData::Emote &emote);
+	void _normalizeEmotePickerSelection();
 	void _initInputBox();
 	void _clearSelection();
 	bool _hasSelection() const;
@@ -208,6 +216,7 @@ public:
 	void updateChat(bool inGame);
 	void renderChat();
 	bool isInputing();
+	bool isEmotePickerOpen() const;
 };
 
 extern InLobbyMenu *activeMenu;

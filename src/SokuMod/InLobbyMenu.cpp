@@ -33,6 +33,9 @@
 #define SCROLL_AMOUNT 20
 #define CHAT_FONT_HEIGHT 14
 #define ELEVEATOR_CTR_DIVIDER 90.f
+#define EMOTE_PICKER_COLUMNS 8
+#define EMOTE_PICKER_ROWS 4
+#define EMOTE_PICKER_PAGE_SIZE (EMOTE_PICKER_COLUMNS * EMOTE_PICKER_ROWS)
 
 #define DEBUG_COLOR 0x404040
 
@@ -721,7 +724,7 @@ int InLobbyMenu::onProcess()
 				messageBox->active = false;
 			}
 		}
-		if (SokuLib::checkKeyOneshot(DIK_ESCAPE, 0, 0, 0)) {
+		if (SokuLib::checkKeyOneshot(DIK_ESCAPE, 0, 0, 0) && !this->_emotePickerClosedThisFrame) {
 			playSound(0x29);
 			if (!this->_editingText) {
 				meMutexLock.unlock();
@@ -1711,6 +1714,17 @@ void InLobbyMenu::_inputBoxUpdate()
 	if (GetForegroundWindow() != SokuLib::window)
 		return;
 	std::lock_guard<std::mutex> lock_(this->keyTimersMutex);
+	this->_emotePickerClosedThisFrame = false;
+	if (this->_emotePickerOpen) {
+		this->_updateEmotePicker();
+		goto ret_reset_keysPressed;
+	}
+	if (!this->_editingText && this->keysPressed[VK_F1]) {
+		this->_emotePickerOpen = true;
+		this->_normalizeEmotePickerSelection();
+		playSound(0x28);
+		goto ret_reset_keysPressed;
+	}
 	bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
 	if (this->keysPressed[VK_PRIOR]) {
 		playSound(0x27);
@@ -1844,6 +1858,79 @@ void InLobbyMenu::_inputBoxUpdate()
 	this->_textMutex.unlock();
 	ret_reset_keysPressed:
 	memset(this->keysPressed, 0, sizeof(this->keysPressed));
+}
+
+void InLobbyMenu::_normalizeEmotePickerSelection()
+{
+	if (lobbyData->emotes.size() <= 1) {
+		this->_emotePickerSelection = 0;
+		return;
+	}
+	if (this->_emotePickerSelection == 0 || this->_emotePickerSelection >= lobbyData->emotes.size())
+		this->_emotePickerSelection = 1;
+}
+
+void InLobbyMenu::_updateEmotePicker()
+{
+	this->_normalizeEmotePickerSelection();
+	if (this->keysPressed[VK_F1] || this->keysPressed[VK_ESCAPE]) {
+		this->_emotePickerOpen = false;
+		this->_emotePickerClosedThisFrame = this->keysPressed[VK_ESCAPE];
+		playSound(0x29);
+		return;
+	}
+	if (lobbyData->emotes.size() <= 1)
+		return;
+
+	const unsigned first = 1;
+	const unsigned last = static_cast<unsigned>(lobbyData->emotes.size() - 1);
+	const unsigned pageStart = first + ((this->_emotePickerSelection - first) / EMOTE_PICKER_PAGE_SIZE) * EMOTE_PICKER_PAGE_SIZE;
+	const unsigned pageEnd = min(last, pageStart + EMOTE_PICKER_PAGE_SIZE - 1);
+	unsigned next = this->_emotePickerSelection;
+	const bool keyboardNavigationDown =
+		(GetAsyncKeyState(VK_LEFT) & 0x8000) ||
+		(GetAsyncKeyState(VK_RIGHT) & 0x8000) ||
+		(GetAsyncKeyState(VK_UP) & 0x8000) ||
+		(GetAsyncKeyState(VK_DOWN) & 0x8000) ||
+		(GetAsyncKeyState(VK_PRIOR) & 0x8000) ||
+		(GetAsyncKeyState(VK_NEXT) & 0x8000);
+	const bool acceptNavigation = !this->_emotePickerNavigationHeld;
+
+	this->_emotePickerNavigationHeld = keyboardNavigationDown;
+	if (acceptNavigation && this->keysPressed[VK_LEFT])
+		next = next == pageStart ? pageEnd : next - 1;
+	else if (acceptNavigation && this->keysPressed[VK_RIGHT])
+		next = next == pageEnd ? pageStart : next + 1;
+	else if (acceptNavigation && this->keysPressed[VK_UP]) {
+		if (next >= first + EMOTE_PICKER_COLUMNS)
+			next -= EMOTE_PICKER_COLUMNS;
+		else
+			next = min(last, first + ((last - first) / EMOTE_PICKER_PAGE_SIZE) * EMOTE_PICKER_PAGE_SIZE + (next - first));
+	} else if (acceptNavigation && this->keysPressed[VK_DOWN]) {
+		if (next + EMOTE_PICKER_COLUMNS <= last)
+			next += EMOTE_PICKER_COLUMNS;
+		else
+			next = first + (next - first) % EMOTE_PICKER_COLUMNS;
+	} else if (acceptNavigation && this->keysPressed[VK_PRIOR])
+		next = pageStart == first ? first + ((last - first) / EMOTE_PICKER_PAGE_SIZE) * EMOTE_PICKER_PAGE_SIZE : pageStart - EMOTE_PICKER_PAGE_SIZE;
+	else if (acceptNavigation && this->keysPressed[VK_NEXT])
+		next = pageEnd == last ? first : pageStart + EMOTE_PICKER_PAGE_SIZE;
+
+	if (next != this->_emotePickerSelection) {
+		this->_emotePickerSelection = min(next, last);
+		playSound(0x27);
+	}
+	if (this->keysPressed[VK_RETURN]) {
+		auto &emote = lobbyData->emotes[this->_emotePickerSelection];
+
+		if (lobbyData->isLocked(emote))
+			playSound(0x29);
+		else {
+			this->_sendEmote(emote);
+			this->_emotePickerOpen = false;
+			playSound(0x28);
+		}
+	}
 }
 
 void InLobbyMenu::_initInputBox()
@@ -2122,6 +2209,20 @@ void InLobbyMenu::_sendMessage(const std::wstring &msg)
 		encoded.insert(pos, "GGs, thanks for the games. It was very nice playing with you, let's play again later");
 	}
 
+	Lobbies::PacketMessage msgPacket{0, 0, encoded};
+
+	this->_connection->send(&msgPacket, sizeof(msgPacket));
+}
+
+void InLobbyMenu::_sendEmote(const LobbyData::Emote &emote)
+{
+	std::string encoded(1, '\x01');
+	auto id = emote.id;
+
+	for (int i = 0; i < 2; i++) {
+		encoded += static_cast<char>((id & 0x7F) | 0x80);
+		id >>= 7;
+	}
 	Lobbies::PacketMessage msgPacket{0, 0, encoded};
 
 	this->_connection->send(&msgPacket, sizeof(msgPacket));
@@ -2413,11 +2514,91 @@ void InLobbyMenu::renderChat()
 		}
 		this->_textCursor.draw();
 	}
+	if (this->_emotePickerOpen)
+		this->_renderEmotePicker();
+}
+
+void InLobbyMenu::_renderEmotePicker()
+{
+	if (lobbyData->emotes.size() <= 1)
+		return;
+
+	constexpr int cellSize = 38;
+	constexpr int panelX = 160;
+	constexpr int panelY = 136;
+	constexpr int padding = 8;
+	constexpr int panelWidth = padding * 2 + EMOTE_PICKER_COLUMNS * cellSize;
+	constexpr int panelHeight = padding * 2 + EMOTE_PICKER_ROWS * cellSize + 24;
+	SokuLib::DrawUtils::RectangleShape panel;
+	SokuLib::DrawUtils::RectangleShape selection;
+
+	panel.setPosition({panelX, panelY});
+	panel.setSize({panelWidth, panelHeight});
+	panel.setBorderColor(SokuLib::Color{0x80, 0x88, 0x98, 0xFF});
+	panel.setFillColor(SokuLib::Color{0x12, 0x16, 0x20, 0xE8});
+	panel.draw();
+
+	const unsigned first = 1;
+	const unsigned last = static_cast<unsigned>(lobbyData->emotes.size() - 1);
+	const unsigned pageStart = first + ((this->_emotePickerSelection - first) / EMOTE_PICKER_PAGE_SIZE) * EMOTE_PICKER_PAGE_SIZE;
+	const unsigned pageEnd = min(last, pageStart + EMOTE_PICKER_PAGE_SIZE - 1);
+
+	for (unsigned i = pageStart; i <= pageEnd; i++) {
+		auto &emote = lobbyData->emotes[i];
+		unsigned cell = i - pageStart;
+		SokuLib::Vector2i pos{
+			panelX + padding + static_cast<int>(cell % EMOTE_PICKER_COLUMNS) * cellSize + 3,
+			panelY + padding + static_cast<int>(cell / EMOTE_PICKER_COLUMNS) * cellSize + 3
+		};
+
+		emote.sprite.rect.left = 0;
+		emote.sprite.rect.top = 0;
+		emote.sprite.rect.width = EMOTE_SIZE;
+		emote.sprite.rect.height = EMOTE_SIZE;
+		emote.sprite.setSize({EMOTE_SIZE, EMOTE_SIZE});
+		emote.sprite.setPosition(pos);
+		emote.sprite.tint = lobbyData->isLocked(emote)
+			? SokuLib::Color{0x70, 0x70, 0x70, 0xA0}
+			: SokuLib::Color::White;
+		emote.sprite.draw();
+	}
+
+	unsigned selectedCell = this->_emotePickerSelection - pageStart;
+	selection.setPosition({
+		panelX + padding + static_cast<int>(selectedCell % EMOTE_PICKER_COLUMNS) * cellSize,
+		panelY + padding + static_cast<int>(selectedCell / EMOTE_PICKER_COLUMNS) * cellSize
+	});
+	selection.setSize({cellSize, cellSize});
+	selection.setBorderColor(lobbyData->isLocked(lobbyData->emotes[this->_emotePickerSelection])
+		? SokuLib::Color{0xB0, 0x58, 0x58, 0xFF}
+		: SokuLib::Color{0x78, 0xB8, 0xD0, 0xFF});
+	selection.setFillColor(SokuLib::Color{0, 0, 0, 0});
+	selection.draw();
+
+	auto &selected = lobbyData->emotes[this->_emotePickerSelection];
+	std::ostringstream label;
+	label << (selected.alias.empty() ? "(no alias)" : ":" + selected.alias.front() + ":")
+		<< (lobbyData->isLocked(selected) ? "  [locked]" : "")
+		<< "    " << ((pageStart - first) / EMOTE_PICKER_PAGE_SIZE + 1)
+		<< "/" << ((last - first) / EMOTE_PICKER_PAGE_SIZE + 1);
+	SokuLib::DrawUtils::Sprite text;
+
+	text.texture.createFromText(label.str().c_str(), this->_chatFont, {panelWidth - padding * 2, 20});
+	text.rect.width = text.texture.getSize().x;
+	text.rect.height = text.texture.getSize().y;
+	text.setSize(text.texture.getSize());
+	text.setPosition({panelX + padding, panelY + padding + EMOTE_PICKER_ROWS * cellSize + 2});
+	text.draw();
 }
 
 bool InLobbyMenu::isInputing()
 {
-	return this->_editingText;
+	return this->_editingText || this->_emotePickerOpen;
+}
+
+bool InLobbyMenu::isEmotePickerOpen() const
+{
+	return this->_emotePickerOpen;
 }
 
 void InLobbyMenu::_updateMessageSprite(SokuLib::Vector2i pos, unsigned int remaining, SokuLib::Vector2i realSize, SokuLib::DrawUtils::Sprite &sprite, unsigned char alpha)
