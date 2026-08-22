@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <random>
 #include <cstdlib>
+#include <cctype>
 #include <algorithm>
 #include <chrono>
 #include <ctime>
@@ -37,7 +38,7 @@
 #define SCROLL_AMOUNT 20
 #define CHAT_FONT_HEIGHT 14
 #define ELEVEATOR_CTR_DIVIDER 90.f
-#define EMOTE_PICKER_COLUMNS 7
+#define EMOTE_PICKER_COLUMNS 8
 #define EMOTE_PICKER_ROWS 4
 #define EMOTE_PICKER_PAGE_SIZE (EMOTE_PICKER_COLUMNS * EMOTE_PICKER_ROWS)
 
@@ -62,6 +63,53 @@ static std::mt19937 random;
 static bool isRectVisible(int x, int y, int width, int height, int margin = 0)
 {
 	return x + width >= -margin && y + height >= -margin && x <= 640 + margin && y <= 480 + margin;
+}
+
+static bool naturalAliasLess(const std::string &left, const std::string &right)
+{
+	size_t leftPos = 0;
+	size_t rightPos = 0;
+
+	while (leftPos < left.size() && rightPos < right.size()) {
+		auto leftChar = static_cast<unsigned char>(left[leftPos]);
+		auto rightChar = static_cast<unsigned char>(right[rightPos]);
+		if (std::isdigit(leftChar) && std::isdigit(rightChar)) {
+			auto leftEnd = leftPos;
+			auto rightEnd = rightPos;
+
+			while (leftEnd < left.size() && std::isdigit(static_cast<unsigned char>(left[leftEnd])))
+				leftEnd++;
+			while (rightEnd < right.size() && std::isdigit(static_cast<unsigned char>(right[rightEnd])))
+				rightEnd++;
+			auto leftNumber = leftPos;
+			auto rightNumber = rightPos;
+			while (leftNumber < leftEnd && left[leftNumber] == '0')
+				leftNumber++;
+			while (rightNumber < rightEnd && right[rightNumber] == '0')
+				rightNumber++;
+			auto leftDigits = leftEnd - leftNumber;
+			auto rightDigits = rightEnd - rightNumber;
+
+			if (leftDigits != rightDigits)
+				return leftDigits < rightDigits;
+			for (size_t i = 0; i < leftDigits; i++)
+				if (left[leftNumber + i] != right[rightNumber + i])
+					return left[leftNumber + i] < right[rightNumber + i];
+			if (leftEnd - leftPos != rightEnd - rightPos)
+				return leftEnd - leftPos < rightEnd - rightPos;
+			leftPos = leftEnd;
+			rightPos = rightEnd;
+			continue;
+		}
+		auto foldedLeft = static_cast<unsigned char>(std::tolower(leftChar));
+		auto foldedRight = static_cast<unsigned char>(std::tolower(rightChar));
+
+		if (foldedLeft != foldedRight)
+			return foldedLeft < foldedRight;
+		leftPos++;
+		rightPos++;
+	}
+	return left.size() < right.size();
 }
 
 static LRESULT __stdcall Hooked_WndProc(const HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -294,6 +342,7 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 	desc.shadow = 0;
 	this->_textBubbleFont.create();
 	this->_textBubbleFont.setIndirect(desc);
+	this->_initEmotePickerOrder();
 	this->_initQuickMessageSprites();
 	this->_initChatPopupModeSprites();
 
@@ -2305,14 +2354,38 @@ void InLobbyMenu::_inputBoxUpdate()
 	memset(this->keysPressed, 0, sizeof(this->keysPressed));
 }
 
+void InLobbyMenu::_initEmotePickerOrder()
+{
+	this->_emotePickerOrder.clear();
+	if (lobbyData->emotes.size() <= 1)
+		return;
+	this->_emotePickerOrder.reserve(lobbyData->emotes.size() - 1);
+	for (unsigned i = 1; i < lobbyData->emotes.size(); i++)
+		this->_emotePickerOrder.push_back(i);
+	std::stable_sort(this->_emotePickerOrder.begin(), this->_emotePickerOrder.end(), [](unsigned leftId, unsigned rightId) {
+		const auto &left = lobbyData->emotes[leftId].alias;
+		const auto &right = lobbyData->emotes[rightId].alias;
+
+		if (left.empty() != right.empty())
+			return !left.empty();
+		if (left.empty())
+			return leftId < rightId;
+		if (naturalAliasLess(left.front(), right.front()))
+			return true;
+		if (naturalAliasLess(right.front(), left.front()))
+			return false;
+		return leftId < rightId;
+	});
+}
+
 void InLobbyMenu::_normalizeEmotePickerSelection()
 {
-	if (lobbyData->emotes.size() <= 1) {
+	if (this->_emotePickerOrder.empty()) {
 		this->_emotePickerSelection = 0;
 		return;
 	}
-	if (this->_emotePickerSelection == 0 || this->_emotePickerSelection >= lobbyData->emotes.size())
-		this->_emotePickerSelection = 1;
+	if (this->_emotePickerSelection >= this->_emotePickerOrder.size())
+		this->_emotePickerSelection = 0;
 }
 
 void InLobbyMenu::_updateEmotePicker()
@@ -2330,11 +2403,11 @@ void InLobbyMenu::_updateEmotePicker()
 		playSound(0x29);
 		return;
 	}
-	if (lobbyData->emotes.size() <= 1)
+	if (this->_emotePickerOrder.empty())
 		return;
 
-	const unsigned first = 1;
-	const unsigned last = static_cast<unsigned>(lobbyData->emotes.size() - 1);
+	const unsigned first = 0;
+	const unsigned last = static_cast<unsigned>(this->_emotePickerOrder.size() - 1);
 	const unsigned pageStart = first + ((this->_emotePickerSelection - first) / EMOTE_PICKER_PAGE_SIZE) * EMOTE_PICKER_PAGE_SIZE;
 	const unsigned pageEnd = min(last, pageStart + EMOTE_PICKER_PAGE_SIZE - 1);
 	unsigned next = this->_emotePickerSelection;
@@ -2372,7 +2445,7 @@ void InLobbyMenu::_updateEmotePicker()
 		playSound(0x27);
 	}
 	if (this->keysPressed[VK_RETURN]) {
-		auto &emote = lobbyData->emotes[this->_emotePickerSelection];
+		auto &emote = lobbyData->emotes[this->_emotePickerOrder[this->_emotePickerSelection]];
 
 		if (lobbyData->isLocked(emote))
 			playSound(0x29);
@@ -3040,15 +3113,15 @@ void InLobbyMenu::renderChat()
 
 void InLobbyMenu::_renderEmotePicker()
 {
-	if (lobbyData->emotes.size() <= 1)
+	if (this->_emotePickerOrder.empty())
 		return;
 
 	constexpr int cellSize = 38;
-	constexpr int panelX = 179;
 	constexpr int panelY = 136;
 	constexpr int padding = 8;
 	constexpr int panelWidth = padding * 2 + EMOTE_PICKER_COLUMNS * cellSize;
 	constexpr int panelHeight = padding * 2 + EMOTE_PICKER_ROWS * cellSize + 24;
+	constexpr int panelX = (640 - panelWidth) / 2;
 	SokuLib::DrawUtils::RectangleShape panel;
 	SokuLib::DrawUtils::RectangleShape selection;
 
@@ -3058,13 +3131,13 @@ void InLobbyMenu::_renderEmotePicker()
 	panel.setFillColor(SokuLib::Color{0x12, 0x16, 0x20, 0xE8});
 	panel.draw();
 
-	const unsigned first = 1;
-	const unsigned last = static_cast<unsigned>(lobbyData->emotes.size() - 1);
+	const unsigned first = 0;
+	const unsigned last = static_cast<unsigned>(this->_emotePickerOrder.size() - 1);
 	const unsigned pageStart = first + ((this->_emotePickerSelection - first) / EMOTE_PICKER_PAGE_SIZE) * EMOTE_PICKER_PAGE_SIZE;
 	const unsigned pageEnd = min(last, pageStart + EMOTE_PICKER_PAGE_SIZE - 1);
 
 	for (unsigned i = pageStart; i <= pageEnd; i++) {
-		auto &emote = lobbyData->emotes[i];
+		auto &emote = lobbyData->emotes[this->_emotePickerOrder[i]];
 		unsigned cell = i - pageStart;
 		SokuLib::Vector2i pos{
 			panelX + padding + static_cast<int>(cell % EMOTE_PICKER_COLUMNS) * cellSize + 3,
@@ -3089,13 +3162,13 @@ void InLobbyMenu::_renderEmotePicker()
 		panelY + padding + static_cast<int>(selectedCell / EMOTE_PICKER_COLUMNS) * cellSize
 	});
 	selection.setSize({cellSize, cellSize});
-	selection.setBorderColor(lobbyData->isLocked(lobbyData->emotes[this->_emotePickerSelection])
+	auto &selected = lobbyData->emotes[this->_emotePickerOrder[this->_emotePickerSelection]];
+	selection.setBorderColor(lobbyData->isLocked(selected)
 		? SokuLib::Color{0xB0, 0x58, 0x58, 0xFF}
 		: SokuLib::Color{0x78, 0xB8, 0xD0, 0xFF});
 	selection.setFillColor(SokuLib::Color{0, 0, 0, 0});
 	selection.draw();
 
-	auto &selected = lobbyData->emotes[this->_emotePickerSelection];
 	std::ostringstream label;
 	label << (selected.alias.empty() ? "(no alias)" : ":" + selected.alias.front() + ":")
 		<< (lobbyData->isLocked(selected) ? "  [locked]" : "")

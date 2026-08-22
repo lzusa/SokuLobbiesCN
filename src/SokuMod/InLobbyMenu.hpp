@@ -188,6 +188,7 @@ private:
 	bool _emotePickerClosedThisFrame = false;
 	bool _emotePickerNavigationHeld = false;
 	unsigned _emotePickerSelection = 0;
+	std::vector<unsigned> _emotePickerOrder;
 	bool _quickMessageMenuOpen = false;
 	bool _quickMessageMenuClosedThisFrame = false;
 	SokuLib::DrawUtils::Sprite _quickMessageSprites[9];
@@ -213,6 +214,7 @@ private:
 	void _inputBoxUpdate();
 	void _updateEmotePicker();
 	void _renderEmotePicker();
+	void _initEmotePickerOrder();
 	void _updateQuickMessageMenu();
 	void _renderQuickMessageMenu();
 	void _initQuickMessageSprites();
