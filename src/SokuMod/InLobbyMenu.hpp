@@ -10,6 +10,8 @@
 #include <thread>
 #include <queue>
 #include <set>
+#include <unordered_map>
+#include <unordered_set>
 #include <chrono>
 #include <Socket.hpp>
 #include <SokuLib.hpp>
@@ -113,6 +115,8 @@ private:
 	bool _wasConnected = false;
 	bool _disconnected = false;
 	std::vector<Player> _playersCopy;
+	std::unordered_map<uint32_t, const Player *> _playersById;
+	std::unordered_set<uint32_t> _playersInsideElevator;
 	unsigned _chatTimer = 0;
 	unsigned _chatOffset = 0;
 	uint8_t _background = 0;
@@ -146,7 +150,6 @@ private:
 		std::chrono::steady_clock::time_point startedAt;
 	};
 	std::map<uint32_t, PlayerTextBubble> _playerTextBubbles;
-	std::mutex _playerTextBubblesMutex;
 	std::map<uint32_t, PlayerData> _extraPlayerData;
 	std::map<uint32_t, std::string> _pendingPlayerNames;
 	std::queue<uint32_t> _pendingPlayerNameOrder;
@@ -198,10 +201,10 @@ private:
 	void _updateRecentOpponent();
 	void _clearRecentOpponent();
 	void _showEmoteBubble(unsigned player, const std::string &msg);
-	void _renderEmoteBubbles();
+	void _renderEmoteBubbles(const std::unordered_map<uint32_t, const Player *> &playersById);
 	void _showTextBubble(unsigned player, const std::string &msg);
 	void _buildTextBubble(unsigned player, const std::string &msg);
-	void _renderTextBubbles();
+	void _renderTextBubbles(const std::unordered_map<uint32_t, const Player *> &playersById);
 	void _queuePlayerName(unsigned player, const std::string &name);
 	void _queuePlayerRemoval(unsigned player);
 	void _buildPlayerName(unsigned player, const std::string &name);

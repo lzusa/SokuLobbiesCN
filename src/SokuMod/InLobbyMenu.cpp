@@ -14,6 +14,9 @@
 #include <iomanip>
 #include <sstream>
 #include <cwctype>
+#include <array>
+#include <unordered_map>
+#include <unordered_set>
 #include "InLobbyMenu.hpp"
 #include "LobbyData.hpp"
 #include "data.hpp"
@@ -55,6 +58,11 @@ InLobbyMenu *activeMenu = nullptr;
 static WNDPROC Original_WndProc = nullptr;
 static std::mutex ptrMutex;
 static std::mt19937 random;
+
+static bool isRectVisible(int x, int y, int width, int height, int margin = 0)
+{
+	return x + width >= -margin && y + height >= -margin && x <= 640 + margin && y <= 480 + margin;
+}
 
 static LRESULT __stdcall Hooked_WndProc(const HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -697,7 +705,6 @@ int InLobbyMenu::onProcess()
 			return true;
 		}
 		this->updateChat(false);
-		this->_updateRecentOpponent();
 		if (this->_parent->choice > 0) {
 			if (this->_parent->subchoice == 5) { //Already Playing
 				this->_parent->notSpectateFlag = !this->_parent->notSpectateFlag;
@@ -1071,6 +1078,14 @@ int InLobbyMenu::onProcess()
 			this->_translate.y = 340 - this->_camera.y;
 		}
 		this->_playersCopy = this->_connection->getPlayers();
+		this->_playersById.clear();
+		this->_playersById.reserve(this->_playersCopy.size());
+		for (const auto &player : this->_playersCopy)
+			this->_playersById.emplace(player.id, &player);
+		this->_playersInsideElevator.clear();
+		this->_playersInsideElevator.reserve(this->_insideElevator.size());
+		this->_playersInsideElevator.insert(this->_insideElevator.begin(), this->_insideElevator.end());
+		this->_updateRecentOpponent();
 		return true;
 	} catch (std::exception &e) {
 		MessageBoxA(
@@ -1136,7 +1151,6 @@ int InLobbyMenu::onRender()
 			this->_translate.y = 0;
 		if (this->_translate.y < 480 - bg.size.y * this->_zoom)
 			this->_translate.y = 480 - bg.size.y * this->_zoom;
-
 		for (auto &layer : bg.layers) {
 			if (layer.type == LobbyData::LAYERTYPE_IMAGE) {
 				SokuLib::Vector2i tsize = {
@@ -1210,7 +1224,8 @@ int InLobbyMenu::onRender()
 				auto s = machine.skin.sprite.getSize();
 
 				machine.skin.sprite.setSize((s * this->_zoom).to<unsigned>());
-				machine.skin.sprite.draw();
+				if (isRectVisible(pos.x, pos.y, machine.skin.sprite.getSize().x, machine.skin.sprite.getSize().y, 16))
+					machine.skin.sprite.draw();
 				machine.skin.sprite.setSize(s);
 
 				pos += machine.skin.animationOffsets * this->_zoom;
@@ -1223,7 +1238,8 @@ int InLobbyMenu::onRender()
 				auto s2 = machine.currentAnim->sprite.getSize();
 
 				machine.currentAnim->sprite.setSize((s2 * this->_zoom).to<unsigned>());
-				machine.currentAnim->sprite.draw();
+				if (isRectVisible(pos.x, pos.y, machine.currentAnim->sprite.getSize().x, machine.currentAnim->sprite.getSize().y, 16))
+					machine.currentAnim->sprite.draw();
 				machine.currentAnim->sprite.setSize(s2);
 
 				machine.mutex.unlock();
@@ -1236,6 +1252,14 @@ int InLobbyMenu::onRender()
 					static_cast<int>(this->_translate.x + (elevator.pos.x - elevator.skin.cage.width / 2) * this->_zoom),
 					static_cast<int>(this->_translate.y + (elevator.pos.y - elevator.skin.cage.height) * this->_zoom )
 				};
+				if (!isRectVisible(
+					pos.x,
+					pos.y,
+					static_cast<int>(elevator.skin.cage.width * this->_zoom),
+					static_cast<int>(elevator.skin.cage.height * this->_zoom),
+					96
+				))
+					continue;
 
 				elevator.skin.sprite.rect = elevator.skin.cage;
 				elevator.skin.sprite.setPosition(pos);
@@ -1298,10 +1322,18 @@ int InLobbyMenu::onRender()
 				}
 			}
 			for (auto &player : this->_playersCopy) {
-				if (std::find(this->_insideElevator.begin(), this->_insideElevator.end(), player.id) == this->_insideElevator.end())
+				if (this->_playersInsideElevator.find(player.id) == this->_playersInsideElevator.end())
 					continue;
 				if (player.player.avatar < lobbyData->avatars.size()) {
 					auto &avatar = lobbyData->avatars[player.player.avatar];
+					auto elevatorScale = this->_elevatorCtr / ELEVEATOR_CTR_DIVIDER + 1;
+					int visibleWidth = static_cast<int>(avatar.sprite.texture.getSize().x / avatar.nbAnimations * avatar.scale / elevatorScale * this->_zoom);
+					int visibleHeight = static_cast<int>(avatar.sprite.texture.getSize().y / 2 * avatar.scale / elevatorScale * this->_zoom);
+					int visibleX = static_cast<int>(this->_translate.x + player.pos.x * this->_zoom - visibleWidth / 2);
+					int visibleY = static_cast<int>(this->_translate.y + player.pos.y * this->_zoom - visibleHeight);
+
+					if (!isRectVisible(visibleX, visibleY, visibleWidth, visibleHeight, 16))
+						continue;
 
 					avatar.sprite.tint = SokuLib::Color::White;
 					avatar.sprite.rect.width = avatar.sprite.texture.getSize().x / avatar.nbAnimations;
@@ -1383,6 +1415,10 @@ int InLobbyMenu::onRender()
 						static_cast<int>(player.pos.y - avatar.sprite.getSize().y)
 					});
 				} else {
+					int visibleX = static_cast<int>(this->_translate.x + (player.pos.x - 32) * this->_zoom);
+					int visibleY = static_cast<int>(this->_translate.y + (player.pos.y + 64) * this->_zoom);
+					if (!isRectVisible(visibleX, visibleY, static_cast<int>(64 * this->_zoom), static_cast<int>(64 * this->_zoom), 16))
+						continue;
 					rect2.setSize({static_cast<unsigned int>(64 * this->_zoom), static_cast<unsigned int>(64 * this->_zoom)});
 					rect2.setPosition({
 						static_cast<int>(this->_translate.x + (player.pos.x - 32) * this->_zoom),
@@ -1401,6 +1437,14 @@ int InLobbyMenu::onRender()
 					static_cast<int>(this->_translate.x + (elevator.pos.x - elevator.skin.cage.width / 2) * this->_zoom),
 					static_cast<int>(this->_translate.y + (elevator.pos.y - elevator.skin.cage.height) * this->_zoom)
 				};
+				if (!isRectVisible(
+					pos.x,
+					pos.y,
+					static_cast<int>(elevator.skin.cage.width * this->_zoom),
+					static_cast<int>(elevator.skin.cage.height * this->_zoom),
+					32
+				))
+					continue;
 
 				if (elevator.skin.anim == LobbyData::DOOR_OPEN_SLIDE) {
 					pos += elevator.skin.doorOffset * this->_zoom;
@@ -1448,10 +1492,17 @@ int InLobbyMenu::onRender()
 			}
 
 			for (auto &player : this->_playersCopy) {
-				if (std::find(this->_insideElevator.begin(), this->_insideElevator.end(), player.id) != this->_insideElevator.end())
+				if (this->_playersInsideElevator.find(player.id) != this->_playersInsideElevator.end())
 					continue;
 				if (player.player.avatar < lobbyData->avatars.size()) {
 					auto &avatar = lobbyData->avatars[player.player.avatar];
+					int visibleWidth = static_cast<int>(avatar.sprite.texture.getSize().x / avatar.nbAnimations * avatar.scale * this->_zoom);
+					int visibleHeight = static_cast<int>(avatar.sprite.texture.getSize().y / 2 * avatar.scale * this->_zoom);
+					int visibleX = static_cast<int>(this->_translate.x + player.pos.x * this->_zoom - visibleWidth / 2);
+					int visibleY = static_cast<int>(this->_translate.y + player.pos.y * this->_zoom - visibleHeight);
+
+					if (!isRectVisible(visibleX, visibleY, visibleWidth, visibleHeight, 16))
+						continue;
 
 					avatar.sprite.tint = SokuLib::Color::White;
 					avatar.sprite.rect.width = avatar.sprite.texture.getSize().x / avatar.nbAnimations;
@@ -1487,6 +1538,10 @@ int InLobbyMenu::onRender()
 						status.draw();
 					}
 				} else {
+					int visibleX = static_cast<int>(this->_translate.x + (player.pos.x - 32) * this->_zoom);
+					int visibleY = static_cast<int>(this->_translate.y + (player.pos.y - 64) * this->_zoom);
+					if (!isRectVisible(visibleX, visibleY, static_cast<int>(64 * this->_zoom), static_cast<int>(64 * this->_zoom), 16))
+						continue;
 					rect2.setSize({static_cast<unsigned int>(64 * this->_zoom), static_cast<unsigned int>(64 * this->_zoom)});
 					rect2.setPosition({
 						static_cast<int>(this->_translate.x + (player.pos.x - 64 / 2) * this->_zoom),
@@ -1497,11 +1552,20 @@ int InLobbyMenu::onRender()
 			}
 		}
 
-		this->_renderTextBubbles();
-		this->_renderEmoteBubbles();
-		std::vector<std::tuple<float, float, float>> lastTexts;
+		this->_renderTextBubbles(this->_playersById);
+		this->_renderEmoteBubbles(this->_playersById);
+		struct NamePlacement {
+			float minX;
+			float maxX;
+			float y;
+		};
+		constexpr int firstNameRow = -2;
+		constexpr int lastNameRow = 25;
+		static thread_local std::array<std::vector<NamePlacement>, lastNameRow - firstNameRow + 1> nameRows;
 
-		lastTexts.reserve(this->_playersCopy.size());
+		for (auto &row : nameRows)
+			row.clear();
+
 		for (auto &player : this->_playersCopy) {
 			auto playerData = this->_extraPlayerData.find(player.id);
 			if (playerData == this->_extraPlayerData.end())
@@ -1510,29 +1574,45 @@ int InLobbyMenu::onRender()
 			auto minPos = this->_translate.x + player.pos.x * this->_zoom - name.getSize().x / 2.f;
 			auto maxPos = this->_translate.x + player.pos.x * this->_zoom + name.getSize().x / 2.f;
 			auto posY = this->_translate.y + (player.pos.y - 120) * this->_zoom;
-			bool conflict;
+			if (!isRectVisible(
+				static_cast<int>(minPos),
+				static_cast<int>(posY),
+				static_cast<int>(name.getSize().x),
+				static_cast<int>(name.getSize().y),
+				16
+			))
+				continue;
+			bool conflict = false;
+			bool visible = true;
 
 			do {
 				conflict = false;
-				for (auto &old: lastTexts) {
-					if (std::get<1>(old) < minPos)
-						continue;
-					if (std::get<0>(old) > maxPos)
-						continue;
-					if (std::get<2>(old) <= posY - 20)
-						continue;
-					if (std::get<2>(old) >= posY + 20)
-						continue;
-					conflict = true;
-					posY -= 20;
+				auto row = static_cast<int>(std::floor(posY / 20.f));
+				for (
+					int nearbyRow = max(firstNameRow, row - 1);
+					nearbyRow <= min(lastNameRow, row + 1) && !conflict;
+					nearbyRow++
+				) {
+					for (const auto &old : nameRows[nearbyRow - firstNameRow]) {
+						if (old.maxX < minPos || old.minX > maxPos || old.y <= posY - 20 || old.y >= posY + 20)
+							continue;
+						conflict = true;
+						posY -= 20;
+						break;
+					}
 				}
-			} while (conflict);
+				if (posY + name.getSize().y < 0)
+					visible = false;
+			} while (conflict && visible);
+			if (!visible)
+				continue;
 
 			name.setPosition({
 				static_cast<int>(minPos),
 				static_cast<int>(posY)
 			});
-			lastTexts.emplace_back(minPos, maxPos, posY);
+			auto row = std::clamp(static_cast<int>(std::floor(posY / 20.f)), firstNameRow, lastNameRow);
+			nameRows[row - firstNameRow].push_back({minPos, maxPos, posY});
 			name.draw();
 		}
 		this->_translate = oldTranslate;
@@ -1657,13 +1737,10 @@ void InLobbyMenu::_processPendingTextureWork()
 			for (auto player : removals)
 				this->_playerEmoteBubbles.erase(player);
 		}
-		{
-			std::lock_guard<std::mutex> lock(this->_playerTextBubblesMutex);
-			for (auto player : removals)
-				this->_playerTextBubbles.erase(player);
-		}
-		for (auto player : removals)
+		for (auto player : removals) {
+			this->_playerTextBubbles.erase(player);
 			this->_extraPlayerData.erase(player);
+		}
 	}
 	for (const auto &[player, name] : playerNames)
 		this->_buildPlayerName(player, name);
@@ -1693,7 +1770,7 @@ void InLobbyMenu::_showEmoteBubble(unsigned player, const std::string &msg)
 	this->_playerEmoteBubbles[player] = {emoteId, std::chrono::steady_clock::now()};
 }
 
-void InLobbyMenu::_renderEmoteBubbles()
+void InLobbyMenu::_renderEmoteBubbles(const std::unordered_map<uint32_t, const Player *> &playersById)
 {
 	constexpr auto lifetime = std::chrono::milliseconds(10000);
 	constexpr auto fadeIn = std::chrono::milliseconds(150);
@@ -1713,11 +1790,10 @@ void InLobbyMenu::_renderEmoteBubbles()
 	}
 
 	for (const auto &[playerId, bubble] : bubbles) {
-		auto player = std::find_if(this->_playersCopy.begin(), this->_playersCopy.end(), [playerId](const Player &value) {
-			return value.id == playerId;
-		});
-		if (player == this->_playersCopy.end() || bubble.emoteId >= lobbyData->emotes.size())
+		auto playerEntry = playersById.find(playerId);
+		if (playerEntry == playersById.end() || bubble.emoteId >= lobbyData->emotes.size())
 			continue;
+		auto player = playerEntry->second;
 
 		auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - bubble.startedAt);
 		float opacity = 1.f;
@@ -1842,7 +1918,6 @@ void InLobbyMenu::_buildTextBubble(unsigned player, const std::string &msg)
 			return;
 		}
 	}
-	std::lock_guard<std::mutex> lock(this->_playerTextBubblesMutex);
 	auto &bubble = this->_playerTextBubbles[player];
 	for (unsigned i = lineCount; i < bubble.lineCount; i++)
 		bubble.text[i].texture.destroy();
@@ -1859,27 +1934,24 @@ void InLobbyMenu::_buildTextBubble(unsigned player, const std::string &msg)
 	bubble.startedAt = std::chrono::steady_clock::now();
 }
 
-void InLobbyMenu::_renderTextBubbles()
+void InLobbyMenu::_renderTextBubbles(const std::unordered_map<uint32_t, const Player *> &playersById)
 {
 	constexpr auto lifetime = std::chrono::milliseconds(10000);
 	constexpr auto fadeIn = std::chrono::milliseconds(150);
 	constexpr auto fadeOut = std::chrono::milliseconds(400);
 	auto now = std::chrono::steady_clock::now();
-	std::lock_guard<std::mutex> lock(this->_playerTextBubblesMutex);
-
 	for (auto it = this->_playerTextBubbles.begin(); it != this->_playerTextBubbles.end();) {
 		auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second.startedAt);
 		if (elapsed >= lifetime) {
 			it = this->_playerTextBubbles.erase(it);
 			continue;
 		}
-		auto player = std::find_if(this->_playersCopy.begin(), this->_playersCopy.end(), [&it](const Player &value) {
-			return value.id == it->first;
-		});
-		if (player == this->_playersCopy.end()) {
+		auto playerEntry = playersById.find(it->first);
+		if (playerEntry == playersById.end()) {
 			++it;
 			continue;
 		}
+		auto player = playerEntry->second;
 
 		float opacity = 1.f;
 		if (elapsed < fadeIn)
@@ -1935,7 +2007,7 @@ void InLobbyMenu::_updateRecentOpponent()
 	auto me = this->_connection->getMe();
 	if (!me)
 		return;
-	auto players = this->_connection->getPlayers();
+	const auto &players = this->_playersCopy;
 	auto now = std::chrono::steady_clock::now();
 	auto machineId = this->_currentMachine ? this->_currentMachine->id : me->machineId;
 	std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
