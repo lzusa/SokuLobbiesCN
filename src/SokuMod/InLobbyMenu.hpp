@@ -151,13 +151,18 @@ private:
 		std::chrono::steady_clock::time_point startedAt;
 	};
 	std::map<uint32_t, PlayerTextBubble> _playerTextBubbles;
+	struct PendingTextBubble {
+		std::string message;
+		std::chrono::steady_clock::time_point receivedAt;
+	};
 	std::map<uint32_t, PlayerData> _extraPlayerData;
 	std::map<uint32_t, std::string> _pendingPlayerNames;
 	std::queue<uint32_t> _pendingPlayerNameOrder;
-	std::map<uint32_t, std::string> _pendingTextBubbles;
+	std::map<uint32_t, PendingTextBubble> _pendingTextBubbles;
 	std::queue<uint32_t> _pendingTextBubbleOrder;
 	std::set<uint32_t> _pendingPlayerRemovals;
 	std::mutex _pendingTextureWorkMutex;
+	bool _textBubblesOutsideLobby = false;
 	std::wstring _buffer;
 	std::vector<ArcadeMachine> _machines;
 	std::vector<ElevatorMachine> _elevators;
@@ -218,7 +223,8 @@ private:
 	void _showEmoteBubble(unsigned player, const std::string &msg);
 	void _renderEmoteBubbles(const std::unordered_map<uint32_t, const Player *> &playersById);
 	void _showTextBubble(unsigned player, const std::string &msg);
-	void _buildTextBubble(unsigned player, const std::string &msg);
+	void _buildTextBubble(unsigned player, const std::string &msg, std::chrono::steady_clock::time_point receivedAt);
+	void _clearTextBubbles();
 	void _renderTextBubbles(const std::unordered_map<uint32_t, const Player *> &playersById);
 	void _queuePlayerName(unsigned player, const std::string &name);
 	void _queuePlayerRemoval(unsigned player);

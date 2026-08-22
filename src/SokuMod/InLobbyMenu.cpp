@@ -42,6 +42,8 @@
 #define EMOTE_PICKER_ROWS 4
 #define EMOTE_PICKER_PAGE_SIZE (EMOTE_PICKER_COLUMNS * EMOTE_PICKER_ROWS)
 
+static constexpr auto TEXT_BUBBLE_LIFETIME = std::chrono::milliseconds(10000);
+
 #define DEBUG_COLOR 0x404040
 
 struct CDesignSprite {
@@ -1797,9 +1799,15 @@ void InLobbyMenu::_processPendingTextureWork()
 	constexpr unsigned textBubblesPerFrame = 2;
 	std::set<uint32_t> removals;
 	std::vector<std::pair<uint32_t, std::string>> playerNames;
-	std::vector<std::pair<uint32_t, std::string>> textBubbles;
+	struct TextBubbleWork {
+		uint32_t player;
+		std::string message;
+		std::chrono::steady_clock::time_point receivedAt;
+	};
+	std::vector<TextBubbleWork> textBubbles;
 	{
 		std::lock_guard<std::mutex> lock(this->_pendingTextureWorkMutex);
+		auto now = std::chrono::steady_clock::now();
 
 		removals.swap(this->_pendingPlayerRemovals);
 		for (unsigned i = 0; i < playerNamesPerFrame && !this->_pendingPlayerNameOrder.empty();) {
@@ -1818,7 +1826,8 @@ void InLobbyMenu::_processPendingTextureWork()
 			auto work = this->_pendingTextBubbles.find(player);
 			if (work == this->_pendingTextBubbles.end())
 				continue;
-			textBubbles.emplace_back(work->first, std::move(work->second));
+			if (now - work->second.receivedAt < TEXT_BUBBLE_LIFETIME)
+				textBubbles.push_back({work->first, std::move(work->second.message), work->second.receivedAt});
 			this->_pendingTextBubbles.erase(work);
 			i++;
 		}
@@ -1836,8 +1845,8 @@ void InLobbyMenu::_processPendingTextureWork()
 	}
 	for (const auto &[player, name] : playerNames)
 		this->_buildPlayerName(player, name);
-	for (const auto &[player, msg] : textBubbles)
-		this->_buildTextBubble(player, msg);
+	for (const auto &work : textBubbles)
+		this->_buildTextBubble(work.player, work.message, work.receivedAt);
 }
 
 void InLobbyMenu::_showEmoteBubble(unsigned player, const std::string &msg)
@@ -1932,15 +1941,15 @@ void InLobbyMenu::_renderEmoteBubbles(const std::unordered_map<uint32_t, const P
 
 void InLobbyMenu::_showTextBubble(unsigned player, const std::string &msg)
 {
-	if (!showTextBubbles || player == 0)
+	if (!showTextBubbles || player == 0 || SokuLib::sceneId != SokuLib::SCENE_TITLE)
 		return;
 	std::lock_guard<std::mutex> lock(this->_pendingTextureWorkMutex);
 	if (this->_pendingTextBubbles.find(player) == this->_pendingTextBubbles.end())
 		this->_pendingTextBubbleOrder.push(player);
-	this->_pendingTextBubbles[player] = msg;
+	this->_pendingTextBubbles[player] = {msg, std::chrono::steady_clock::now()};
 }
 
-void InLobbyMenu::_buildTextBubble(unsigned player, const std::string &msg)
+void InLobbyMenu::_buildTextBubble(unsigned player, const std::string &msg, std::chrono::steady_clock::time_point receivedAt)
 {
 	auto bodyStart = msg.find("]: ");
 	if (bodyStart == std::string::npos)
@@ -2023,18 +2032,28 @@ void InLobbyMenu::_buildTextBubble(unsigned player, const std::string &msg)
 		bubble.textSize[i] = textSizes[i];
 	}
 	bubble.lineCount = lineCount;
-	bubble.startedAt = std::chrono::steady_clock::now();
+	bubble.startedAt = receivedAt;
+}
+
+void InLobbyMenu::_clearTextBubbles()
+{
+	{
+		std::lock_guard<std::mutex> lock(this->_pendingTextureWorkMutex);
+		this->_pendingTextBubbles.clear();
+		std::queue<uint32_t> empty;
+		this->_pendingTextBubbleOrder.swap(empty);
+	}
+	this->_playerTextBubbles.clear();
 }
 
 void InLobbyMenu::_renderTextBubbles(const std::unordered_map<uint32_t, const Player *> &playersById)
 {
-	constexpr auto lifetime = std::chrono::milliseconds(10000);
 	constexpr auto fadeIn = std::chrono::milliseconds(150);
 	constexpr auto fadeOut = std::chrono::milliseconds(400);
 	auto now = std::chrono::steady_clock::now();
 	for (auto it = this->_playerTextBubbles.begin(); it != this->_playerTextBubbles.end();) {
 		auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second.startedAt);
-		if (elapsed >= lifetime) {
+		if (elapsed >= TEXT_BUBBLE_LIFETIME) {
 			it = this->_playerTextBubbles.erase(it);
 			continue;
 		}
@@ -2048,8 +2067,8 @@ void InLobbyMenu::_renderTextBubbles(const std::unordered_map<uint32_t, const Pl
 		float opacity = 1.f;
 		if (elapsed < fadeIn)
 			opacity = static_cast<float>(elapsed.count()) / fadeIn.count();
-		else if (elapsed > lifetime - fadeOut)
-			opacity = static_cast<float>((lifetime - elapsed).count()) / fadeOut.count();
+		else if (elapsed > TEXT_BUBBLE_LIFETIME - fadeOut)
+			opacity = static_cast<float>((TEXT_BUBBLE_LIFETIME - elapsed).count()) / fadeOut.count();
 		unsigned char alpha = static_cast<unsigned char>(std::clamp(opacity, 0.f, 1.f) * 255);
 		int avatarHeight = 64;
 		if (player->player.avatar < lobbyData->avatars.size()) {
@@ -2931,6 +2950,11 @@ void InLobbyMenu::updateChat(bool inGame)
 {
 	if (this->_disconnected)
 		return;
+	const bool outsideLobby = SokuLib::sceneId != SokuLib::SCENE_TITLE;
+	if (outsideLobby != this->_textBubblesOutsideLobby) {
+		this->_clearTextBubbles();
+		this->_textBubblesOutsideLobby = outsideLobby;
+	}
 	this->_inputBoxUpdate();
 	if (this->_chatPopupModeTimer)
 		this->_chatPopupModeTimer--;
