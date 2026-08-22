@@ -138,6 +138,14 @@ private:
 	};
 	std::map<uint32_t, PlayerEmoteBubble> _playerEmoteBubbles;
 	std::mutex _playerEmoteBubblesMutex;
+	struct PlayerTextBubble {
+		SokuLib::DrawUtils::Sprite text[2];
+		SokuLib::Vector2i textSize[2];
+		unsigned lineCount = 0;
+		std::chrono::steady_clock::time_point startedAt;
+	};
+	std::map<uint32_t, PlayerTextBubble> _playerTextBubbles;
+	std::mutex _playerTextBubblesMutex;
 	std::map<uint32_t, PlayerData> _extraPlayerData;
 	std::wstring _buffer;
 	std::vector<ArcadeMachine> _machines;
@@ -153,6 +161,7 @@ private:
 
 	// Chat input box
 	SokuLib::SWRFont _chatFont;
+	SokuLib::SWRFont _textBubbleFont;
 	SokuLib::DrawUtils::RectangleShape _textCursor;
 	SokuLib::DrawUtils::Sprite _textSprite[2];
 	std::mutex _textMutex;
@@ -181,6 +190,8 @@ private:
 	void _clearRecentOpponent();
 	void _showEmoteBubble(unsigned player, const std::string &msg);
 	void _renderEmoteBubbles();
+	void _showTextBubble(unsigned player, const std::string &msg);
+	void _renderTextBubbles();
 	void _logChatToFile(unsigned player, const std::string &msg);
 	void _inputBoxUpdate();
 	void _updateEmotePicker();

@@ -162,6 +162,7 @@ unsigned lobbyJoinTries;
 unsigned lobbyJoinInterval;
 unsigned maxChatMessages;
 unsigned opponentChatColor = 0x7FA6D9;
+bool showTextBubbles = true;
 unsigned short servPort;
 unsigned short hostPort;
 bool hasSoku2 = false;
@@ -1220,6 +1221,7 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE hPar
 	lobbyJoinTries = GetPrivateProfileIntW(L"Lobby", L"JoinTries", 15, profilePath);
 	lobbyJoinInterval = GetPrivateProfileIntW(L"Lobby", L"JoinInterval", 1, profilePath);
 	maxChatMessages = GetPrivateProfileIntW(L"Lobby", L"MaxChatMessages", 100, profilePath);
+	showTextBubbles = GetPrivateProfileIntW(L"Lobby", L"ShowTextBubbles", 1, profilePath) != 0;
 	{
 		wchar_t colorBuffer[32];
 		GetPrivateProfileStringW(L"Lobby", L"OpponentChatColor", L"7FA6D9", colorBuffer, sizeof(colorBuffer) / sizeof(*colorBuffer), profilePath);

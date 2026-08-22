@@ -6,7 +6,7 @@
 
 bool textureUnderline = false;
 
-static void setFont(HDC context, SokuLib::SWRFont &font)
+static void setFont(HDC context, SokuLib::SWRFont &font, bool sharp)
 {
 	font.font = CreateFontA(
 		font.description.height,
@@ -20,7 +20,7 @@ static void setFont(HDC context, SokuLib::SWRFont &font)
 		*(int*)0x411c64,
 		OUT_TT_PRECIS,
 		CLIP_DEFAULT_PRECIS,
-		PROOF_QUALITY,
+		sharp ? NONANTIALIASED_QUALITY : PROOF_QUALITY,
 		FIXED_PITCH | FF_MODERN,
 		font.description.faceName
 	);
@@ -79,7 +79,7 @@ static void __fastcall repl_textShadow(int height, int width, int lineSize, unsi
 	}
 }
 
-bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, SokuLib::Vector2i texsize, SokuLib::Vector2i *size)
+bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, SokuLib::Vector2i texsize, SokuLib::Vector2i *size, bool sharp)
 {
 	printf("Creating texture for wtext %S\n", text);
 	auto strSize = wcslen(text);
@@ -128,7 +128,7 @@ bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, 
 
 	font.maxWidth = texsize.x;
 	font.maxHeight = texsize.y;
-	setFont(context, font);
+	setFont(context, font, sharp);
 	SetBkColor(context, 0x000000);
 	SetTextColor(context, 0xffffff);
 	if (!TextOutW(context, font.description.offsetX, font.description.offsetY, text, strSize)) {
@@ -191,7 +191,7 @@ bool createTextTexture(int &retId, const wchar_t* text, SokuLib::SWRFont& font, 
 	return true;
 }
 
-SokuLib::Vector2i getTextSize(const wchar_t *text, SokuLib::SWRFont &font, SokuLib::Vector2i texsize)
+SokuLib::Vector2i getTextSize(const wchar_t *text, SokuLib::SWRFont &font, SokuLib::Vector2i texsize, bool sharp)
 {
 	auto strSize = wcslen(text);
 	LPDIRECT3DTEXTURE9 texPtr2;
@@ -222,7 +222,7 @@ SokuLib::Vector2i getTextSize(const wchar_t *text, SokuLib::SWRFont &font, SokuL
 
 	font.maxWidth = texsize.x;
 	font.maxHeight = texsize.y;
-	setFont(context, font);
+	setFont(context, font, sharp);
 	if (!GetTextExtentPoint32W(context, text, strSize, &actualSize)) {
 		puts("Error in GetTextExtentPoint32W");
 		texPtr2->Release();

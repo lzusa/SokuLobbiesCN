@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <cwctype>
 #include "InLobbyMenu.hpp"
 #include "LobbyData.hpp"
 #include "data.hpp"
@@ -280,6 +281,11 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 
 	this->_chatFont.create();
 	this->_chatFont.setIndirect(desc);
+	desc.height = 16 + hasEnglishPatch * 2;
+	desc.weight = FW_MEDIUM;
+	desc.shadow = 0;
+	this->_textBubbleFont.create();
+	this->_textBubbleFont.setIndirect(desc);
 	this->_initQuickMessageSprites();
 
 	for (int i = 0; i < 3; i++) {
@@ -380,6 +386,8 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		}
 		std::lock_guard<std::mutex> lock(this->_playerEmoteBubblesMutex);
 		this->_playerEmoteBubbles.erase(r.id);
+		std::lock_guard<std::mutex> textLock(this->_playerTextBubblesMutex);
+		this->_playerTextBubbles.erase(r.id);
 	};
 	this->_connection->onConnect = [this](const Lobbies::PacketOlleh &r){
 		auto &bg = lobbyData->backgrounds[r.bg];
@@ -455,6 +463,7 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		playSound(49);
 		this->_logChatToFile(player, msg);
 		this->_showEmoteBubble(player, msg);
+		this->_showTextBubble(player, msg);
 		std::optional<unsigned> colorOverride;
 		bool opponentDisconnected = false;
 		{
@@ -1506,6 +1515,7 @@ int InLobbyMenu::onRender()
 			}
 		}
 
+		this->_renderTextBubbles();
 		this->_renderEmoteBubbles();
 		std::vector<std::tuple<float, float, float>> lastTexts;
 
@@ -1673,6 +1683,166 @@ void InLobbyMenu::_renderEmoteBubbles()
 		emote.sprite.setPosition({x + 7, y + 7});
 		emote.sprite.tint = SokuLib::Color{0xFF, 0xFF, 0xFF, alpha};
 		emote.sprite.draw();
+	}
+}
+
+void InLobbyMenu::_showTextBubble(unsigned player, const std::string &msg)
+{
+	if (!showTextBubbles || player == 0)
+		return;
+	auto bodyStart = msg.find("]: ");
+	if (bodyStart == std::string::npos)
+		return;
+	bodyStart += 3;
+	std::string body;
+	for (size_t i = bodyStart; i < msg.size();) {
+		if (static_cast<unsigned char>(msg[i]) == 0x01 && i + 2 < msg.size()) {
+			i += 3;
+			continue;
+		}
+		body += msg[i++];
+	}
+	if (body.empty())
+		return;
+
+	std::wstring text;
+	try {
+		text = convertEncoding<char, wchar_t, UTF8Decode, UTF16Encode>(body);
+	} catch (...) {
+		return;
+	}
+	for (auto &c : text)
+		if (c == L'\r' || c == L'\n' || c == L'\t')
+			c = L' ';
+	text.erase(text.begin(), std::find_if(text.begin(), text.end(), [](wchar_t c) { return !std::iswspace(c); }));
+	text.erase(std::find_if(text.rbegin(), text.rend(), [](wchar_t c) { return !std::iswspace(c); }).base(), text.end());
+	if (text.empty())
+		return;
+
+	constexpr int maxTextWidth = 260;
+	auto &bubbleFont = this->_textBubbleFont;
+	auto popCodepoint = [](std::wstring &value) {
+		if (value.empty())
+			return;
+		value.pop_back();
+		if (!value.empty() && value.back() >= 0xD800 && value.back() <= 0xDBFF)
+			value.pop_back();
+	};
+	auto fits = [&](const std::wstring &value) {
+		return getTextSize(value.c_str(), bubbleFont, {512, 28}, true).x <= maxTextWidth;
+	};
+	std::wstring lines[2];
+	if (fits(text))
+		lines[0] = text;
+	else {
+		size_t fit = 0;
+		for (size_t i = 0; i < text.size();) {
+			auto next = i + 1;
+			if (text[i] >= 0xD800 && text[i] <= 0xDBFF && next < text.size() && text[next] >= 0xDC00 && text[next] <= 0xDFFF)
+				next++;
+			if (!fits(text.substr(0, next)))
+				break;
+			fit = next;
+			i = next;
+		}
+		if (!fit)
+			fit = text.size() >= 2 && text[0] >= 0xD800 && text[0] <= 0xDBFF && text[1] >= 0xDC00 && text[1] <= 0xDFFF ? 2 : 1;
+		auto breakAt = text.find_last_of(L" \t", fit - 1);
+		if (breakAt != std::wstring::npos && breakAt != 0)
+			fit = breakAt;
+		lines[0] = text.substr(0, fit);
+		lines[1] = text.substr(fit);
+		lines[1].erase(lines[1].begin(), std::find_if(lines[1].begin(), lines[1].end(), [](wchar_t c) { return !std::iswspace(c); }));
+		if (!fits(lines[1])) {
+			while (!lines[1].empty() && !fits(lines[1] + L"..."))
+				popCodepoint(lines[1]);
+			lines[1] += L"...";
+		}
+	}
+
+	unsigned lineCount = lines[1].empty() ? 1 : 2;
+	SokuLib::Vector2i textSizes[2]{};
+	int textureIds[2]{};
+	for (unsigned i = 0; i < lineCount; i++)
+		if (!createTextTexture(textureIds[i], lines[i].c_str(), bubbleFont, {maxTextWidth, 28}, &textSizes[i], true))
+			return;
+	std::lock_guard<std::mutex> lock(this->_playerTextBubblesMutex);
+	auto &bubble = this->_playerTextBubbles[player];
+	for (unsigned i = 0; i < lineCount; i++) {
+		bubble.text[i].texture.setHandle(textureIds[i], {maxTextWidth, 28});
+		bubble.text[i].rect.left = 0;
+		bubble.text[i].rect.top = 0;
+		bubble.text[i].rect.width = textSizes[i].x;
+		bubble.text[i].rect.height = textSizes[i].y;
+		bubble.text[i].setSize(textSizes[i].to<unsigned>());
+		bubble.textSize[i] = textSizes[i];
+	}
+	bubble.lineCount = lineCount;
+	bubble.startedAt = std::chrono::steady_clock::now();
+}
+
+void InLobbyMenu::_renderTextBubbles()
+{
+	constexpr auto lifetime = std::chrono::milliseconds(10000);
+	constexpr auto fadeIn = std::chrono::milliseconds(150);
+	constexpr auto fadeOut = std::chrono::milliseconds(400);
+	auto now = std::chrono::steady_clock::now();
+	std::lock_guard<std::mutex> lock(this->_playerTextBubblesMutex);
+
+	for (auto it = this->_playerTextBubbles.begin(); it != this->_playerTextBubbles.end();) {
+		auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second.startedAt);
+		if (elapsed >= lifetime) {
+			it = this->_playerTextBubbles.erase(it);
+			continue;
+		}
+		auto player = std::find_if(this->_playersCopy.begin(), this->_playersCopy.end(), [&it](const Player &value) {
+			return value.id == it->first;
+		});
+		if (player == this->_playersCopy.end()) {
+			++it;
+			continue;
+		}
+
+		float opacity = 1.f;
+		if (elapsed < fadeIn)
+			opacity = static_cast<float>(elapsed.count()) / fadeIn.count();
+		else if (elapsed > lifetime - fadeOut)
+			opacity = static_cast<float>((lifetime - elapsed).count()) / fadeOut.count();
+		unsigned char alpha = static_cast<unsigned char>(std::clamp(opacity, 0.f, 1.f) * 255);
+		int avatarHeight = 64;
+		if (player->player.avatar < lobbyData->avatars.size()) {
+			auto &avatar = lobbyData->avatars[player->player.avatar];
+			avatarHeight = static_cast<int>(avatar.sprite.texture.getSize().y / 2 * avatar.scale);
+		}
+		int textWidth = 0;
+		for (unsigned i = 0; i < it->second.lineCount; i++)
+			textWidth = max(textWidth, it->second.textSize[i].x);
+		int bubbleWidth = std::clamp(textWidth + 18, 60, 278);
+		int bubbleHeight = it->second.lineCount == 2 ? 58 : 38;
+		int x = static_cast<int>(this->_translate.x + player->pos.x * this->_zoom - bubbleWidth / 2);
+		int y = static_cast<int>(this->_translate.y + (player->pos.y - avatarHeight) * this->_zoom - bubbleHeight - 8);
+		x = std::clamp(x, 2, 638 - bubbleWidth);
+		y = std::clamp(y, 2, 471 - bubbleHeight);
+
+		SokuLib::DrawUtils::RectangleShape frame;
+		SokuLib::DrawUtils::RectangleShape tail;
+		frame.setPosition({x, y});
+		frame.setSize({static_cast<unsigned>(bubbleWidth), static_cast<unsigned>(bubbleHeight)});
+		frame.setBorderColor(SokuLib::Color{0x78, 0x80, 0x90, alpha});
+		frame.setFillColor(SokuLib::Color{0xF0, 0xF2, 0xF5, static_cast<unsigned char>(alpha * 0.9f)});
+		frame.draw();
+		tail.setPosition({x + bubbleWidth / 2 - 3, y + bubbleHeight - 1});
+		tail.setSize({6, 7});
+		tail.setBorderColor(SokuLib::Color{0x78, 0x80, 0x90, alpha});
+		tail.setFillColor(SokuLib::Color{0xF0, 0xF2, 0xF5, static_cast<unsigned char>(alpha * 0.9f)});
+		tail.draw();
+
+		for (unsigned i = 0; i < it->second.lineCount; i++) {
+			it->second.text[i].tint = SokuLib::Color{0x20, 0x24, 0x2C, alpha};
+			it->second.text[i].setPosition({x + 9, y + 6 + static_cast<int>(i) * 24});
+			it->second.text[i].draw();
+		}
+		++it;
 	}
 }
 

@@ -28,6 +28,7 @@ extern unsigned lobbyJoinTries;
 extern unsigned lobbyJoinInterval;
 extern unsigned maxChatMessages;
 extern unsigned opponentChatColor;
+extern bool showTextBubbles;
 extern unsigned hostPref;
 extern unsigned chatKey;
 extern std::wstring quickMessages[9];
