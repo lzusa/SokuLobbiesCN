@@ -34,7 +34,7 @@
 #define SCROLL_AMOUNT 20
 #define CHAT_FONT_HEIGHT 14
 #define ELEVEATOR_CTR_DIVIDER 90.f
-#define EMOTE_PICKER_COLUMNS 8
+#define EMOTE_PICKER_COLUMNS 7
 #define EMOTE_PICKER_ROWS 4
 #define EMOTE_PICKER_PAGE_SIZE (EMOTE_PICKER_COLUMNS * EMOTE_PICKER_ROWS)
 
@@ -2863,7 +2863,7 @@ void InLobbyMenu::_renderEmotePicker()
 		return;
 
 	constexpr int cellSize = 38;
-	constexpr int panelX = 160;
+	constexpr int panelX = 179;
 	constexpr int panelY = 136;
 	constexpr int padding = 8;
 	constexpr int panelWidth = padding * 2 + EMOTE_PICKER_COLUMNS * cellSize;
