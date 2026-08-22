@@ -62,6 +62,18 @@ static WNDPROC Original_WndProc = nullptr;
 static std::mutex ptrMutex;
 static std::mt19937 random;
 
+struct RecentOpponentSession {
+	uint32_t playerId;
+	std::string playerName;
+	uint32_t machineId;
+	bool matchActive;
+	std::chrono::steady_clock::time_point expiresAt;
+	std::string lobbyIdentity;
+};
+
+static std::optional<RecentOpponentSession> recentOpponentSession;
+static std::mutex recentOpponentSessionMutex;
+
 static bool isRectVisible(int x, int y, int width, int height, int margin = 0)
 {
 	return x + width >= -margin && y + height >= -margin && x <= 640 + margin && y <= 480 + margin;
@@ -464,14 +476,22 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		this->_disconnected = true;
 	};
 	this->_connection->onPlayerJoin = [this](const Player &r){
+		{
+			std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
+			if (this->_recentOpponent && !this->_recentOpponent->matchActive && this->_recentOpponent->playerName == r.name)
+				this->_recentOpponent->playerId = r.id;
+		}
 		this->_queuePlayerName(r.id, r.name);
 	};
 	this->_connection->onPlayerLeave = [this](const Player &r){
 		{
 			std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
-			if (this->_recentOpponent && this->_recentOpponent->playerId == r.id)
-				this->_recentOpponent.reset();
+			if (this->_recentOpponent && this->_recentOpponent->playerId == r.id) {
+				this->_recentOpponent->matchActive = false;
+				this->_recentOpponent->expiresAt = std::chrono::steady_clock::now() + std::chrono::minutes(5);
+			}
 		}
+		this->_saveRecentOpponent();
 		this->_queuePlayerRemoval(r.id);
 	};
 	this->_connection->onConnect = [this](const Lobbies::PacketOlleh &r){
@@ -510,6 +530,8 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		this->_connection->getMe()->pos.y = bg.platforms[bg.startPlatform].pos.y;
 
 		this->_roomName = std::string(r.name, strnlen(r.name, sizeof(r.name)));
+		this->_lobbyIdentity = std::string(servHost) + ":" + std::to_string(servPort) + "/" + this->_roomName;
+		this->_restoreRecentOpponent();
 		this->_queuePlayerName(r.id, std::string(r.realName, strnlen(r.realName, sizeof(r.realName))));
 		this->_music = "data/bgm/" + std::string(r.music, strnlen(r.music, sizeof(r.music))) + ".ogg";
 		SokuLib::playBGM(this->_music.c_str());
@@ -570,8 +592,14 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		if (chatPopupMode != CHAT_POPUP_NEVER && !playerPresenceMessage)
 			playSound(49);
 		this->_addMessageToList(channel, player, msg, colorOverride, autoPopup);
-		if (opponentDisconnected)
-			this->_clearRecentOpponent();
+		if (opponentDisconnected) {
+			std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
+			if (this->_recentOpponent) {
+				this->_recentOpponent->matchActive = false;
+				this->_recentOpponent->expiresAt = std::chrono::steady_clock::now() + std::chrono::minutes(5);
+			}
+		}
+		this->_saveRecentOpponent();
 	};
 	this->_connection->onConnectRequest = [this](const std::string &ip, unsigned short port, bool spectate){
 		printf("onConnectRequest %s %u %s\n", ip.c_str(), port, spectate ? "true" : "false");
@@ -719,6 +747,7 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 
 InLobbyMenu::~InLobbyMenu()
 {
+	this->_saveRecentOpponent(true);
 	ptrMutex.lock();
 	activeMenu = nullptr;
 	ptrMutex.unlock();
@@ -2107,10 +2136,57 @@ void InLobbyMenu::_renderTextBubbles(const std::unordered_map<uint32_t, const Pl
 	}
 }
 
-void InLobbyMenu::_clearRecentOpponent()
+void InLobbyMenu::_restoreRecentOpponent()
 {
+	auto now = std::chrono::steady_clock::now();
+	std::optional<RecentOpponentSession> session;
+	{
+		std::lock_guard<std::mutex> sessionLock(recentOpponentSessionMutex);
+		if (!recentOpponentSession || recentOpponentSession->lobbyIdentity != this->_lobbyIdentity)
+			return;
+		if (!recentOpponentSession->matchActive && now >= recentOpponentSession->expiresAt) {
+			recentOpponentSession.reset();
+			return;
+		}
+		session = recentOpponentSession;
+	}
 	std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
-	this->_recentOpponent.reset();
+	this->_recentOpponent = RecentOpponent{
+		session->playerId,
+		session->playerName,
+		session->machineId,
+		session->matchActive,
+		session->expiresAt
+	};
+}
+
+void InLobbyMenu::_saveRecentOpponent(bool leavingLobby)
+{
+	if (this->_lobbyIdentity.empty())
+		return;
+	auto now = std::chrono::steady_clock::now();
+	std::optional<RecentOpponent> opponent;
+	{
+		std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
+		if (!this->_recentOpponent)
+			return;
+		if (leavingLobby && this->_recentOpponent->matchActive) {
+			this->_recentOpponent->matchActive = false;
+			this->_recentOpponent->expiresAt = now + std::chrono::minutes(5);
+		}
+		if (!this->_recentOpponent->matchActive && now >= this->_recentOpponent->expiresAt)
+			return;
+		opponent = this->_recentOpponent;
+	}
+	std::lock_guard<std::mutex> sessionLock(recentOpponentSessionMutex);
+	recentOpponentSession = RecentOpponentSession{
+		opponent->playerId,
+		opponent->playerName,
+		opponent->machineId,
+		opponent->matchActive,
+		opponent->expiresAt,
+		this->_lobbyIdentity
+	};
 }
 
 void InLobbyMenu::_updateRecentOpponent()
@@ -2121,7 +2197,7 @@ void InLobbyMenu::_updateRecentOpponent()
 	const auto &players = this->_playersCopy;
 	auto now = std::chrono::steady_clock::now();
 	auto machineId = this->_currentMachine ? this->_currentMachine->id : me->machineId;
-	std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
+	std::unique_lock<std::mutex> lock(this->_recentOpponentMutex);
 
 	if (this->_recentOpponent) {
 		if (!this->_recentOpponent->matchActive) {
@@ -2131,11 +2207,18 @@ void InLobbyMenu::_updateRecentOpponent()
 				});
 				if (opponent != players.end()) {
 					this->_recentOpponent = RecentOpponent{opponent->id, opponent->name, opponent->machineId};
+					lock.unlock();
+					this->_saveRecentOpponent();
 					return;
 				}
 			}
-			if (now >= this->_recentOpponent->expiresAt)
+			if (now >= this->_recentOpponent->expiresAt) {
 				this->_recentOpponent.reset();
+				lock.unlock();
+				std::lock_guard<std::mutex> sessionLock(recentOpponentSessionMutex);
+				if (recentOpponentSession && recentOpponentSession->lobbyIdentity == this->_lobbyIdentity)
+					recentOpponentSession.reset();
+			}
 			return;
 		}
 
@@ -2152,6 +2235,8 @@ void InLobbyMenu::_updateRecentOpponent()
 			this->_recentOpponent->matchActive = false;
 			this->_recentOpponent->expiresAt = now + std::chrono::minutes(5);
 		}
+		lock.unlock();
+		this->_saveRecentOpponent();
 		return;
 	}
 
@@ -2164,6 +2249,8 @@ void InLobbyMenu::_updateRecentOpponent()
 			player.battleStatus == Lobbies::BATTLE_STATUS_PLAYING
 		) {
 			this->_recentOpponent = RecentOpponent{player.id, player.name, player.machineId};
+			lock.unlock();
+			this->_saveRecentOpponent();
 			return;
 		}
 	}

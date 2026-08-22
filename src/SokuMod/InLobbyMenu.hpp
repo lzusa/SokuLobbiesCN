@@ -106,6 +106,7 @@ private:
 	SokuLib::Vector2i _translateTarget{0, 0};
 	unsigned char _translateAnimation = 0;
 	std::string _roomName;
+	std::string _lobbyIdentity;
 	LobbyMenu *_menu;
 	ArcadeMachine *_currentMachine = nullptr;
 	ElevatorMachine *_currentElevator = nullptr;
@@ -219,7 +220,8 @@ private:
 	void _updateMessageSprite(SokuLib::Vector2i pos, unsigned int remaining, SokuLib::Vector2i realSize, SokuLib::DrawUtils::Sprite &sprite, unsigned char alpha);
 	void _addMessageToList(unsigned channel, unsigned player, const std::string &msg, std::optional<unsigned> colorOverride = std::nullopt, bool autoPopup = true);
 	void _updateRecentOpponent();
-	void _clearRecentOpponent();
+	void _restoreRecentOpponent();
+	void _saveRecentOpponent(bool leavingLobby = false);
 	void _showEmoteBubble(unsigned player, const std::string &msg);
 	void _renderEmoteBubbles(const std::unordered_map<uint32_t, const Player *> &playersById);
 	void _showTextBubble(unsigned player, const std::string &msg);
