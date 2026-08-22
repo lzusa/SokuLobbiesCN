@@ -1675,8 +1675,6 @@ int InLobbyMenu::onRender()
 			}
 		}
 
-		this->_renderTextBubbles(this->_playersById);
-		this->_renderEmoteBubbles(this->_playersById);
 		struct NamePlacement {
 			float minX;
 			float maxX;
@@ -1738,6 +1736,8 @@ int InLobbyMenu::onRender()
 			nameRows[row - firstNameRow].push_back({minPos, maxPos, posY});
 			name.draw();
 		}
+		this->_renderTextBubbles(this->_playersById);
+		this->_renderEmoteBubbles(this->_playersById);
 		this->_translate = oldTranslate;
 		if (this->_currentMachine)
 			this->_renderMachineOverlay();
