@@ -163,6 +163,7 @@ unsigned lobbyJoinInterval;
 unsigned maxChatMessages;
 unsigned opponentChatColor = 0x7FA6D9;
 bool showTextBubbles = true;
+ChatPopupMode chatPopupMode = CHAT_POPUP_ALL;
 unsigned short servPort;
 unsigned short hostPort;
 bool hasSoku2 = false;
@@ -1222,6 +1223,16 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE hPar
 	lobbyJoinInterval = GetPrivateProfileIntW(L"Lobby", L"JoinInterval", 1, profilePath);
 	maxChatMessages = GetPrivateProfileIntW(L"Lobby", L"MaxChatMessages", 100, profilePath);
 	showTextBubbles = GetPrivateProfileIntW(L"Lobby", L"ShowTextBubbles", 1, profilePath) != 0;
+	{
+		wchar_t popupMode[32];
+		GetPrivateProfileStringW(L"Lobby", L"ChatPopupMode", L"All", popupMode, sizeof(popupMode) / sizeof(*popupMode), profilePath);
+		if (_wcsicmp(popupMode, L"Battle") == 0 || _wcsicmp(popupMode, L"Opponents") == 0 || wcscmp(popupMode, L"1") == 0)
+			chatPopupMode = CHAT_POPUP_OPPONENTS;
+		else if (_wcsicmp(popupMode, L"Never") == 0 || wcscmp(popupMode, L"2") == 0)
+			chatPopupMode = CHAT_POPUP_NEVER;
+		else
+			chatPopupMode = CHAT_POPUP_ALL;
+	}
 	{
 		wchar_t colorBuffer[32];
 		GetPrivateProfileStringW(L"Lobby", L"OpponentChatColor", L"7FA6D9", colorBuffer, sizeof(colorBuffer) / sizeof(*colorBuffer), profilePath);

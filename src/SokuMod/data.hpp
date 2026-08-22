@@ -18,6 +18,12 @@ struct Character {
 	unsigned nbSkills;
 };
 
+enum ChatPopupMode {
+	CHAT_POPUP_ALL,
+	CHAT_POPUP_OPPONENTS,
+	CHAT_POPUP_NEVER
+};
+
 extern wchar_t profilePath[MAX_PATH];
 extern wchar_t profileFolderPath[MAX_PATH];
 extern char servHost[64];
@@ -29,6 +35,7 @@ extern unsigned lobbyJoinInterval;
 extern unsigned maxChatMessages;
 extern unsigned opponentChatColor;
 extern bool showTextBubbles;
+extern ChatPopupMode chatPopupMode;
 extern unsigned hostPref;
 extern unsigned chatKey;
 extern std::wstring quickMessages[9];

@@ -287,6 +287,7 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 	this->_textBubbleFont.create();
 	this->_textBubbleFont.setIndirect(desc);
 	this->_initQuickMessageSprites();
+	this->_initChatPopupModeSprites();
 
 	for (int i = 0; i < 3; i++) {
 		const char *paths[3] = {
@@ -460,19 +461,21 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		this->_openMessageBox(23, msg, std::string("Notification from server"), MB_ICONINFORMATION);
 	};
 	this->_connection->onMsg = [this](int32_t channel, int32_t player, const std::string &msg){
-		playSound(49);
 		this->_logChatToFile(player, msg);
 		this->_showEmoteBubble(player, msg);
 		this->_showTextBubble(player, msg);
 		std::optional<unsigned> colorOverride;
 		bool opponentDisconnected = false;
+		bool opponentMessage = false;
 		{
 			std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
 			if (this->_recentOpponent) {
 				auto now = std::chrono::steady_clock::now();
 				bool highlighted = this->_recentOpponent->matchActive || now < this->_recentOpponent->expiresAt;
-				if (highlighted && player == this->_recentOpponent->playerId)
+				if (highlighted && player == this->_recentOpponent->playerId) {
 					colorOverride = opponentChatColor;
+					opponentMessage = true;
+				}
 				if (player == 0) {
 					auto disconnectPrefix = this->_recentOpponent->playerName + " has disconnected";
 					auto kickedPrefix = this->_recentOpponent->playerName + " has been kicked:";
@@ -483,7 +486,10 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 				}
 			}
 		}
-		this->_addMessageToList(channel, player, msg, colorOverride);
+		bool autoPopup = chatPopupMode == CHAT_POPUP_ALL || (chatPopupMode == CHAT_POPUP_OPPONENTS && opponentMessage);
+		if (chatPopupMode != CHAT_POPUP_NEVER)
+			playSound(49);
+		this->_addMessageToList(channel, player, msg, colorOverride, autoPopup);
 		if (opponentDisconnected)
 			this->_clearRecentOpponent();
 	};
@@ -1587,9 +1593,10 @@ void InLobbyMenu::_unhook()
 	this->_connection->onArcadeLeave = this->onArcadeLeave;
 }
 
-void InLobbyMenu::_addMessageToList(unsigned int channel, unsigned player, const std::string &msg, std::optional<unsigned> colorOverride)
+void InLobbyMenu::_addMessageToList(unsigned int channel, unsigned player, const std::string &msg, std::optional<unsigned> colorOverride, bool autoPopup)
 {
-	this->_chatTimer = 900;
+	if (autoPopup)
+		this->_chatTimer = 900;
 	std::lock_guard<std::mutex> lock(this->_chatMessagesMutex);
 	this->_chatMessages.emplace_front();
 	this->_chatMessages.front().lazy_message.emplace(channel, player, msg, colorOverride);
@@ -1996,6 +2003,19 @@ void InLobbyMenu::_inputBoxUpdate()
 		this->_updateQuickMessageMenu();
 		goto ret_reset_keysPressed;
 	}
+	if (this->keysPressed[VK_F3]) {
+		chatPopupMode = static_cast<ChatPopupMode>((chatPopupMode + 1) % 3);
+		this->_chatPopupModeTimer = 180;
+		if (chatPopupMode == CHAT_POPUP_NEVER) {
+			this->_editingText = false;
+			this->_clearSelection();
+			this->_chatOffset = 0;
+			this->_chatTimer = 0;
+			this->_chatSeat.tint.a = 0;
+		}
+		playSound(0x27);
+		goto ret_reset_keysPressed;
+	}
 	if (!this->_editingText && this->keysPressed[VK_F1]) {
 		this->_emotePickerOpen = true;
 		this->_normalizeEmotePickerSelection();
@@ -2267,6 +2287,21 @@ void InLobbyMenu::_initQuickMessageSprites()
 		});
 		if (quickMessages[i].empty())
 			this->_quickMessageSprites[i].tint = SokuLib::Color{0x80, 0x80, 0x80, 0xFF};
+	}
+}
+
+void InLobbyMenu::_initChatPopupModeSprites()
+{
+	const char *labels[3] = {
+		"Chat popup: All players",
+		"Chat popup: Battle players only",
+		"Chat popup: Never"
+	};
+	for (unsigned i = 0; i < 3; i++) {
+		this->_chatPopupModeSprites[i].texture.createFromText(labels[i], this->_textBubbleFont, {300, 28});
+		this->_chatPopupModeSprites[i].rect.width = this->_chatPopupModeSprites[i].texture.getSize().x;
+		this->_chatPopupModeSprites[i].rect.height = this->_chatPopupModeSprites[i].texture.getSize().y;
+		this->_chatPopupModeSprites[i].setSize(this->_chatPopupModeSprites[i].texture.getSize());
 	}
 }
 
@@ -2570,6 +2605,8 @@ void InLobbyMenu::updateChat(bool inGame)
 	if (this->_disconnected)
 		return;
 	this->_inputBoxUpdate();
+	if (this->_chatPopupModeTimer)
+		this->_chatPopupModeTimer--;
 	if (this->_editingText)
 		this->_chatTimer = 300;
 	else if (inGame)
@@ -2855,6 +2892,8 @@ void InLobbyMenu::renderChat()
 		this->_renderEmotePicker();
 	if (this->_quickMessageMenuOpen)
 		this->_renderQuickMessageMenu();
+	if (this->_chatPopupModeTimer)
+		this->_renderChatPopupMode();
 }
 
 void InLobbyMenu::_renderEmotePicker()
@@ -2951,6 +2990,26 @@ void InLobbyMenu::_renderQuickMessageMenu()
 		});
 		this->_quickMessageSprites[i].draw();
 	}
+}
+
+void InLobbyMenu::_renderChatPopupMode()
+{
+	auto &text = this->_chatPopupModeSprites[chatPopupMode];
+	unsigned char alpha = this->_chatPopupModeTimer > 30 ? 255 : static_cast<unsigned char>(this->_chatPopupModeTimer * 255 / 30);
+	constexpr int width = 316;
+	constexpr int height = 42;
+	constexpr int x = (640 - width) / 2;
+	constexpr int y = 28;
+	SokuLib::DrawUtils::RectangleShape panel;
+
+	panel.setPosition({x, y});
+	panel.setSize({width, height});
+	panel.setBorderColor(SokuLib::Color{0x78, 0x80, 0x90, alpha});
+	panel.setFillColor(SokuLib::Color{0x12, 0x16, 0x20, static_cast<unsigned char>(alpha * 0.9f)});
+	panel.draw();
+	text.tint = SokuLib::Color{0xFF, 0xFF, 0xFF, alpha};
+	text.setPosition({x + 8, y + 7});
+	text.draw();
 }
 
 bool InLobbyMenu::isInputing()

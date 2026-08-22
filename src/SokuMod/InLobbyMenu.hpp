@@ -182,10 +182,12 @@ private:
 	bool _quickMessageMenuClosedThisFrame = false;
 	SokuLib::DrawUtils::Sprite _quickMessageSprites[9];
 	SokuLib::Vector2i _quickMessageTextSizes[9];
+	SokuLib::DrawUtils::Sprite _chatPopupModeSprites[3];
+	unsigned _chatPopupModeTimer = 0;
 	std::map<unsigned, int> _textSize;
 
 	void _updateMessageSprite(SokuLib::Vector2i pos, unsigned int remaining, SokuLib::Vector2i realSize, SokuLib::DrawUtils::Sprite &sprite, unsigned char alpha);
-	void _addMessageToList(unsigned channel, unsigned player, const std::string &msg, std::optional<unsigned> colorOverride = std::nullopt);
+	void _addMessageToList(unsigned channel, unsigned player, const std::string &msg, std::optional<unsigned> colorOverride = std::nullopt, bool autoPopup = true);
 	void _updateRecentOpponent();
 	void _clearRecentOpponent();
 	void _showEmoteBubble(unsigned player, const std::string &msg);
@@ -199,6 +201,8 @@ private:
 	void _updateQuickMessageMenu();
 	void _renderQuickMessageMenu();
 	void _initQuickMessageSprites();
+	void _initChatPopupModeSprites();
+	void _renderChatPopupMode();
 	void _sendEmote(const LobbyData::Emote &emote);
 	void _normalizeEmotePickerSelection();
 	void _initInputBox();
