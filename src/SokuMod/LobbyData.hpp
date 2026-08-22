@@ -11,6 +11,7 @@
 #include <vector>
 #include <string>
 #include <optional>
+#include <filesystem>
 #include <SokuLib.hpp>
 #include <curl/curl.h>
 #include "nlohmann/json.hpp"
@@ -26,6 +27,8 @@ private:
 	};
 
 	void _loadStats();
+	void _loadStatsFile(const std::filesystem::path &path);
+	void _clearStats();
 	void _loadAvatars();
 	void _loadBackgrounds();
 	void _loadEmotes();
