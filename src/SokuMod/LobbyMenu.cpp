@@ -498,12 +498,19 @@ bool LobbyMenu::_customizeAvatarUpdate()
 	}
 	if (std::abs(SokuLib::inputMgrs.input.verticalAxis) == 1 || (std::abs(SokuLib::inputMgrs.input.verticalAxis) > 36 && std::abs(SokuLib::inputMgrs.input.verticalAxis) % 6 == 0)) {
 		playSound(0x27);
-		if (this->_customCursor < 4 && SokuLib::inputMgrs.input.verticalAxis < 0)
-			this->_customCursor = 0;
-		else if (this->_customCursor + 4 >= lobbyData->avatars.size() && SokuLib::inputMgrs.input.verticalAxis > 0)
-			this->_customCursor = lobbyData->avatars.size() - 1;
+		constexpr int avatarsPerRow = 4;
+		if (SokuLib::inputMgrs.input.verticalAxis < 0) {
+			if (this->_customCursor < avatarsPerRow) {
+				auto column = this->_customCursor % avatarsPerRow;
+				auto last = static_cast<int>(lobbyData->avatars.size()) - 1;
+
+				this->_customCursor = last - (last - column + avatarsPerRow) % avatarsPerRow;
+			} else
+				this->_customCursor -= avatarsPerRow;
+		} else if (this->_customCursor + avatarsPerRow >= lobbyData->avatars.size())
+			this->_customCursor %= avatarsPerRow;
 		else
-			this->_customCursor = this->_customCursor + (int)std::copysign(4, SokuLib::inputMgrs.input.verticalAxis);
+			this->_customCursor += avatarsPerRow;
 		this->_updateTopAvatarOffset();
 		this->_refreshAvatarCustomText();
 	}
