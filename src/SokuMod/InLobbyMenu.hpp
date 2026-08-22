@@ -109,6 +109,7 @@ private:
 	std::string _lobbyIdentity;
 	LobbyMenu *_menu;
 	ArcadeMachine *_currentMachine = nullptr;
+	std::chrono::steady_clock::time_point _nextArcadeActionAt{};
 	ElevatorMachine *_currentElevator = nullptr;
 	SokuLib::Vector2u _camera;
 	float _zoom = 1;

@@ -1019,7 +1019,10 @@ int InLobbyMenu::onProcess()
 				break;
 			}
 		} else if (!this->_currentMachine && !this->_editingText) {
-			if (SokuLib::inputMgrs.input.a == 1) {
+			if (
+				SokuLib::inputMgrs.input.a == 1 &&
+				std::chrono::steady_clock::now() >= this->_nextArcadeActionAt
+			) {
 				for (auto &machine : this->_machines) {
 					if (me->pos.x < machine.pos.x - machine.skin.sprite.getSize().x / 2)
 						continue;
@@ -1045,6 +1048,7 @@ int InLobbyMenu::onProcess()
 					Lobbies::PacketGameRequest packet{machine.id};
 					Lobbies::PacketBattleStatusUpdate p{0, Lobbies::BATTLE_STATUS_WAITING};
 
+					this->_nextArcadeActionAt = std::chrono::steady_clock::now() + std::chrono::seconds(1);
 					me->battleStatus = Lobbies::BATTLE_STATUS_WAITING;
 					this->_connection->send(&packet, sizeof(packet));
 					this->_connection->send(&p, sizeof(p));
@@ -1111,10 +1115,16 @@ int InLobbyMenu::onProcess()
 
 				this->_connection->send(&m, sizeof(m));
 			}
-			if (SokuLib::inputMgrs.input.b == 1 && !this->_editingText && !this->_hostlist) {
+			if (
+				SokuLib::inputMgrs.input.b == 1 &&
+				!this->_editingText &&
+				!this->_hostlist &&
+				std::chrono::steady_clock::now() >= this->_nextArcadeActionAt
+			) {
 				Lobbies::PacketArcadeLeave l{0};
 				Lobbies::PacketBattleStatusUpdate p{0, Lobbies::BATTLE_STATUS_IDLE};
 
+				this->_nextArcadeActionAt = std::chrono::steady_clock::now() + std::chrono::seconds(1);
 				this->_connection->send(&p, sizeof(p));
 				this->_connection->send(&l, sizeof(l));
 				me->battleStatus = Lobbies::BATTLE_STATUS_IDLE;
