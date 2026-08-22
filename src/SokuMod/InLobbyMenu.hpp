@@ -132,6 +132,12 @@ private:
 	};
 	std::optional<RecentOpponent> _recentOpponent;
 	std::mutex _recentOpponentMutex;
+	struct PlayerEmoteBubble {
+		unsigned emoteId;
+		std::chrono::steady_clock::time_point startedAt;
+	};
+	std::map<uint32_t, PlayerEmoteBubble> _playerEmoteBubbles;
+	std::mutex _playerEmoteBubblesMutex;
 	std::map<uint32_t, PlayerData> _extraPlayerData;
 	std::wstring _buffer;
 	std::vector<ArcadeMachine> _machines;
@@ -173,6 +179,8 @@ private:
 	void _addMessageToList(unsigned channel, unsigned player, const std::string &msg, std::optional<unsigned> colorOverride = std::nullopt);
 	void _updateRecentOpponent();
 	void _clearRecentOpponent();
+	void _showEmoteBubble(unsigned player, const std::string &msg);
+	void _renderEmoteBubbles();
 	void _logChatToFile(unsigned player, const std::string &msg);
 	void _inputBoxUpdate();
 	void _updateEmotePicker();

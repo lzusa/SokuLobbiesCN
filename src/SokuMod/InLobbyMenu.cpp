@@ -373,9 +373,13 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		this->_extraPlayerData[r.id].name.rect.height = size.y;
 	};
 	this->_connection->onPlayerLeave = [this](const Player &r){
-		std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
-		if (this->_recentOpponent && this->_recentOpponent->playerId == r.id)
-			this->_recentOpponent.reset();
+		{
+			std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
+			if (this->_recentOpponent && this->_recentOpponent->playerId == r.id)
+				this->_recentOpponent.reset();
+		}
+		std::lock_guard<std::mutex> lock(this->_playerEmoteBubblesMutex);
+		this->_playerEmoteBubbles.erase(r.id);
 	};
 	this->_connection->onConnect = [this](const Lobbies::PacketOlleh &r){
 		auto &bg = lobbyData->backgrounds[r.bg];
@@ -450,6 +454,7 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 	this->_connection->onMsg = [this](int32_t channel, int32_t player, const std::string &msg){
 		playSound(49);
 		this->_logChatToFile(player, msg);
+		this->_showEmoteBubble(player, msg);
 		std::optional<unsigned> colorOverride;
 		bool opponentDisconnected = false;
 		{
@@ -1501,6 +1506,7 @@ int InLobbyMenu::onRender()
 			}
 		}
 
+		this->_renderEmoteBubbles();
 		std::vector<std::tuple<float, float, float>> lastTexts;
 
 		lastTexts.reserve(this->_playersCopy.size());
@@ -1577,6 +1583,97 @@ void InLobbyMenu::_addMessageToList(unsigned int channel, unsigned player, const
 	std::lock_guard<std::mutex> lock(this->_chatMessagesMutex);
 	this->_chatMessages.emplace_front();
 	this->_chatMessages.front().lazy_message.emplace(channel, player, msg, colorOverride);
+}
+
+void InLobbyMenu::_showEmoteBubble(unsigned player, const std::string &msg)
+{
+	if (player == 0)
+		return;
+	auto marker = msg.find('\x01');
+	if (
+		marker == std::string::npos || marker + 3 != msg.size() || marker < 3 ||
+		msg.compare(marker - 3, 3, "]: ") != 0
+	)
+		return;
+	auto low = static_cast<unsigned char>(msg[marker + 1]);
+	auto high = static_cast<unsigned char>(msg[marker + 2]);
+	if (!(low & 0x80) || !(high & 0x80))
+		return;
+	unsigned emoteId = (low & 0x7F) | ((high & 0x7F) << 7);
+	if (emoteId == 0 || emoteId >= lobbyData->emotes.size())
+		return;
+
+	std::lock_guard<std::mutex> lock(this->_playerEmoteBubblesMutex);
+	this->_playerEmoteBubbles[player] = {emoteId, std::chrono::steady_clock::now()};
+}
+
+void InLobbyMenu::_renderEmoteBubbles()
+{
+	constexpr auto lifetime = std::chrono::milliseconds(10000);
+	constexpr auto fadeIn = std::chrono::milliseconds(150);
+	constexpr auto fadeOut = std::chrono::milliseconds(400);
+	auto now = std::chrono::steady_clock::now();
+	std::map<uint32_t, PlayerEmoteBubble> bubbles;
+	{
+		std::lock_guard<std::mutex> lock(this->_playerEmoteBubblesMutex);
+		for (auto it = this->_playerEmoteBubbles.begin(); it != this->_playerEmoteBubbles.end();) {
+			if (now - it->second.startedAt >= lifetime)
+				it = this->_playerEmoteBubbles.erase(it);
+			else {
+				bubbles.emplace(*it);
+				++it;
+			}
+		}
+	}
+
+	for (const auto &[playerId, bubble] : bubbles) {
+		auto player = std::find_if(this->_playersCopy.begin(), this->_playersCopy.end(), [playerId](const Player &value) {
+			return value.id == playerId;
+		});
+		if (player == this->_playersCopy.end() || bubble.emoteId >= lobbyData->emotes.size())
+			continue;
+
+		auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - bubble.startedAt);
+		float opacity = 1.f;
+		if (elapsed < fadeIn)
+			opacity = static_cast<float>(elapsed.count()) / fadeIn.count();
+		else if (elapsed > lifetime - fadeOut)
+			opacity = static_cast<float>((lifetime - elapsed).count()) / fadeOut.count();
+		unsigned char alpha = static_cast<unsigned char>(std::clamp(opacity, 0.f, 1.f) * 255);
+		int avatarHeight = 64;
+		if (player->player.avatar < lobbyData->avatars.size()) {
+			auto &avatar = lobbyData->avatars[player->player.avatar];
+			avatarHeight = static_cast<int>(avatar.sprite.texture.getSize().y / 2 * avatar.scale);
+		}
+		int x = static_cast<int>(this->_translate.x + player->pos.x * this->_zoom - 23);
+		int floatOffset = static_cast<int>(std::round(std::sin(elapsed.count() * 2 * M_PI / 1600.f) * 3));
+		int y = static_cast<int>(this->_translate.y + (player->pos.y - avatarHeight) * this->_zoom - 54 - floatOffset);
+		x = std::clamp(x, 2, 592);
+		y = std::clamp(y, 2, 426);
+
+		SokuLib::DrawUtils::RectangleShape frame;
+		SokuLib::DrawUtils::RectangleShape tail;
+		frame.setPosition({x, y});
+		frame.setSize({46, 46});
+		frame.setBorderColor(SokuLib::Color{0x78, 0x80, 0x90, alpha});
+		frame.setFillColor(SokuLib::Color{0xF0, 0xF2, 0xF5, static_cast<unsigned char>(alpha * 0.9f)});
+		frame.draw();
+		tail.setPosition({x + 20, y + 45});
+		tail.setSize({6, 7});
+		tail.setBorderColor(SokuLib::Color{0x78, 0x80, 0x90, alpha});
+		tail.setFillColor(SokuLib::Color{0xF0, 0xF2, 0xF5, static_cast<unsigned char>(alpha * 0.9f)});
+		tail.draw();
+
+		auto &emote = lobbyData->emotes[bubble.emoteId];
+		emote.sprite.rect.left = 0;
+		emote.sprite.rect.top = 0;
+		emote.sprite.rect.width = EMOTE_SIZE;
+		emote.sprite.rect.height = EMOTE_SIZE;
+		emote.sprite.setSize({EMOTE_SIZE, EMOTE_SIZE});
+		emote.sprite.setPosition({x + 7, y + 7});
+		emote.sprite.tint = SokuLib::Color{0xFF, 0xFF, 0xFF, alpha};
+		emote.sprite.draw();
+	}
 }
 
 void InLobbyMenu::_clearRecentOpponent()
