@@ -7,6 +7,7 @@
 #include <cwchar>
 #include <filesystem>
 #include <climits>
+#include <set>
 #include <mlang.h>
 #include <objbase.h>
 
@@ -325,11 +326,15 @@ SmallHostlist::SmallHostlist(float ratio, SokuLib::Vector2i pos, SokuLib::MenuCo
 	this->_botOverlay.emplace_back(new RotatingImage(this->_sprites[9], modifyPos(83, 647), -0.020943951023931952));
 	this->_botOverlay.emplace_back(new Image(this->_sprites[3], modifyPos(0, 632)));
 	this->_netThread = std::thread([this]{
-		while (this->_parent) {
+		while (this->_running) {
 			this->_refreshHostlist();
-			for (int i = 0; i < 1000 && this->_parent; i++)
-				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			std::unique_lock<std::mutex> lock(this->_wakeMutex);
+
+			this->_wakeCondition.wait_for(lock, std::chrono::seconds(10), [this]{
+				return !this->_running;
+			});
 		}
+		this->_workerStopped = true;
 	});
 
 	this->_playing.texture.createFromText("Playing", lobbyData->getFont(12), {400, 20}, &size);
@@ -347,11 +352,22 @@ SmallHostlist::SmallHostlist(float ratio, SokuLib::Vector2i pos, SokuLib::MenuCo
 
 SmallHostlist::~SmallHostlist()
 {
-	this->_parent = nullptr;
+	this->requestStop();
 	if (this->_netThread.joinable())
 		this->_netThread.join();
 	if (this->_errorMsg)
 		free(this->_errorMsg);
+}
+
+void SmallHostlist::requestStop()
+{
+	this->_running = false;
+	this->_wakeCondition.notify_all();
+}
+
+bool SmallHostlist::isStopped() const
+{
+	return this->_workerStopped;
 }
 
 #define CRenderer_Unknown1 ((void (__thiscall *)(int, int))0x404AF0)
@@ -383,8 +399,63 @@ void SmallHostlist::_displaySokuCursor(SokuLib::Vector2i pos, SokuLib::Vector2u 
 	CursorSprites[2].scale.y = 1;
 }
 
+void SmallHostlist::_applyPendingEntries()
+{
+	std::vector<std::unique_ptr<HostEntry>> oldHostEntries;
+	std::vector<std::unique_ptr<PlayEntry>> oldPlayEntries;
+	std::string selectedIp;
+	unsigned short selectedPort = 0;
+	bool newHost = false;
+	{
+		std::lock_guard<std::mutex> lock(this->_entriesMutex);
+
+		if (!this->_hasPendingEntries)
+			return;
+		if (this->_spectator) {
+			if (this->_hostSelect < this->_playEntries.size()) {
+				selectedIp = this->_playEntries[this->_hostSelect]->ip;
+				selectedPort = this->_playEntries[this->_hostSelect]->port;
+			}
+		} else if (this->_hostSelect < this->_hostEntries.size()) {
+			selectedIp = this->_hostEntries[this->_hostSelect]->ip;
+			selectedPort = this->_hostEntries[this->_hostSelect]->port;
+		}
+		oldHostEntries.swap(this->_hostEntries);
+		oldPlayEntries.swap(this->_playEntries);
+		this->_hostEntries.swap(this->_pendingHostEntries);
+		this->_playEntries.swap(this->_pendingPlayEntries);
+		this->_hasPendingEntries = false;
+		newHost = this->_pendingNewHost;
+		this->_pendingNewHost = false;
+	}
+
+	auto findSelection = [&](const auto &entries) {
+		if (!selectedIp.empty()) {
+			auto selected = std::find_if(entries.begin(), entries.end(), [&](const auto &entry) {
+				return entry->ip == selectedIp && entry->port == selectedPort;
+			});
+
+			if (selected != entries.end())
+				return static_cast<unsigned>(std::distance(entries.begin(), selected));
+		}
+		return entries.empty() ? 0u : (std::min)(this->_hostSelect, static_cast<unsigned>(entries.size() - 1));
+	};
+	this->_hostSelect = this->_spectator ? findSelection(this->_playEntries) : findSelection(this->_hostEntries);
+	if (this->_playEntries.size() <= MAX_VISIBLE_ENTRIES)
+		this->_playOffset = 0;
+	else if (this->_playOffset + MAX_VISIBLE_ENTRIES > this->_playEntries.size())
+		this->_playOffset = static_cast<unsigned>(this->_playEntries.size() - MAX_VISIBLE_ENTRIES);
+	if (this->_hostEntries.size() <= MAX_VISIBLE_ENTRIES)
+		this->_hostOffset = 0;
+	else if (this->_hostOffset + MAX_VISIBLE_ENTRIES > this->_hostEntries.size())
+		this->_hostOffset = static_cast<unsigned>(this->_hostEntries.size() - MAX_VISIBLE_ENTRIES);
+	if (newHost)
+		playSound(49);
+}
+
 bool SmallHostlist::update()
 {
+	this->_applyPendingEntries();
 	auto adjustOffset = [this](bool spectator){
 		auto size = spectator ? this->_playEntries.size() : this->_hostEntries.size();
 		auto &offset = spectator ? this->_playOffset : this->_hostOffset;
@@ -652,27 +723,42 @@ static std::string limitStr(const std::string &str, unsigned limit)
 
 void SmallHostlist::_refreshHostlist()
 {
-	bool locked = false;
-
-	
-
+	if (!this->_running)
+		return;
 	try {
-		nlohmann::json val = nlohmann::json::parse(lobbyData->httpRequest("https://konni.delthas.fr/games"));
+		std::set<std::pair<std::string, unsigned short>> knownHosts;
+		{
+			std::lock_guard<std::mutex> lock(this->_entriesMutex);
+
+			for (const auto &entry : this->_hostEntries)
+				knownHosts.emplace(entry->ip, entry->port);
+			for (const auto &entry : this->_pendingHostEntries)
+				knownHosts.emplace(entry->ip, entry->port);
+		}
+		if (!this->_running)
+			return;
+		auto response = lobbyData->httpRequest(
+			"https://konni.delthas.fr/games",
+			"GET",
+			"",
+			20000L,
+			&this->_running
+		);
+		if (!this->_running)
+			return;
+		nlohmann::json val = nlohmann::json::parse(response);
+		std::vector<std::unique_ptr<HostEntry>> hostEntries;
+		std::vector<std::unique_ptr<PlayEntry>> playEntries;
 		bool newHost = false;
 
-		locked = true;
-		this->_entriesMutex.lock();
-		for (auto &a : this->_hostEntries)
-			a->deleted = true;
-		for (auto &a : this->_playEntries)
-			a->deleted = true;
-
 		for (auto &j : val) {
+			if (!this->_running)
+				return;
 			if (j["started"]) {
 				if (!j["spectatable"])
 					continue;
 
-				auto entry = new PlayEntry();
+				auto entry = std::make_unique<PlayEntry>();
 
 				entry->p1chr = j["host_character"];
 				entry->p2chr = j["client_character"];
@@ -684,16 +770,16 @@ void SmallHostlist::_refreshHostlist()
 				entry->port = std::stoul(entry->ip.substr(entry->ip.find_last_of(':') + 1));
 				entry->ip = entry->ip.substr(0, entry->ip.find_last_of(':'));
 
-				auto it = std::find_if(this->_playEntries.begin(), this->_playEntries.end(), [entry](std::unique_ptr<PlayEntry> &a){
+				auto it = std::find_if(playEntries.begin(), playEntries.end(), [&entry](const std::unique_ptr<PlayEntry> &a){
 					return a->ip == entry->ip && a->port == entry->port;
 				});
 
-				if (it == this->_playEntries.end())
-					this->_playEntries.emplace_back(entry);
+				if (it == playEntries.end())
+					playEntries.emplace_back(std::move(entry));
 				else
-					it->reset(entry);
+					*it = std::move(entry);
 			} else {
-				auto entry = new HostEntry();
+				auto entry = std::make_unique<HostEntry>();
 
 				entry->nameStr = convertEncoding<wchar_t, char, UTF16Decode, UTF8Encode>(
 					limitWideStr(decodeHostlistName(j["host_name"].get<std::string>(), j["host_country"].get<std::string>()), 16)
@@ -706,59 +792,35 @@ void SmallHostlist::_refreshHostlist()
 				entry->port = std::stoul(entry->ip.substr(entry->ip.find_last_of(':') + 1));
 				entry->ip = entry->ip.substr(0, entry->ip.find_last_of(':'));
 
-				auto it = std::find_if(this->_hostEntries.begin(), this->_hostEntries.end(), [entry](std::unique_ptr<HostEntry> &a){
+				auto it = std::find_if(hostEntries.begin(), hostEntries.end(), [&entry](const std::unique_ptr<HostEntry> &a){
 					return a->ip == entry->ip && a->port == entry->port;
 				});
 
-				if (it == this->_hostEntries.end()) {
-					this->_hostEntries.emplace_back(entry);
-					newHost = true;
+				if (it == hostEntries.end()) {
+					newHost |= !knownHosts.count({entry->ip, entry->port});
+					hostEntries.emplace_back(std::move(entry));
 				} else
-					it->reset(entry);
+					*it = std::move(entry);
 			}
 		}
+		if (!this->_running)
+			return;
+		{
+			std::lock_guard<std::mutex> lock(this->_entriesMutex);
 
-		if (!this->_spectator && !this->_hostEntries.empty())
-			for (unsigned i = 0; i <= this->_hostSelect && i < this->_hostEntries.size(); i++)
-				this->_hostSelect -= this->_hostEntries[i]->deleted;
-		if (this->_spectator && !this->_playEntries.empty())
-			for (unsigned i = 0; i <= this->_hostSelect && i < this->_playEntries.size(); i++)
-				this->_hostSelect -= this->_playEntries[i]->deleted;
-
-		this->_hostEntries.erase(std::remove_if(this->_hostEntries.begin(), this->_hostEntries.end(), [](const std::unique_ptr<HostEntry> &a){
-			return a->deleted;
-		}), this->_hostEntries.end());
-		this->_playEntries.erase(std::remove_if(this->_playEntries.begin(), this->_playEntries.end(), [](const std::unique_ptr<PlayEntry> &a){
-			return a->deleted;
-		}), this->_playEntries.end());
-
-		if (this->_spectator) {
-			if (this->_playEntries.size() <= MAX_VISIBLE_ENTRIES)
-				this->_playOffset = 0;
-			else if (this->_playOffset + MAX_VISIBLE_ENTRIES > this->_playEntries.size())
-				this->_playOffset = static_cast<unsigned>(this->_playEntries.size() - MAX_VISIBLE_ENTRIES);
-			if (this->_hostSelect >= this->_playEntries.size())
-				this->_hostSelect = this->_playEntries.empty() ? 0u : static_cast<unsigned>(this->_playEntries.size() - 1);
-		} else {
-			if (this->_hostEntries.size() <= MAX_VISIBLE_ENTRIES)
-				this->_hostOffset = 0;
-			else if (this->_hostOffset + MAX_VISIBLE_ENTRIES > this->_hostEntries.size())
-				this->_hostOffset = static_cast<unsigned>(this->_hostEntries.size() - MAX_VISIBLE_ENTRIES);
-			if (this->_hostSelect >= this->_hostEntries.size())
-				this->_hostSelect = this->_hostEntries.empty() ? 0u : static_cast<unsigned>(this->_hostEntries.size() - 1);
+			this->_pendingHostEntries = std::move(hostEntries);
+			this->_pendingPlayEntries = std::move(playEntries);
+			this->_hasPendingEntries = true;
+			this->_pendingNewHost |= newHost;
 		}
-		this->_entriesMutex.unlock();
-		locked = false;
-		if (newHost)
-			playSound(49);
 		this->_errorMutex.lock();
 		if (this->_errorMsg)
 			free(this->_errorMsg);
 		this->_errorMsg = strdup("");
 		this->_errorMutex.unlock();
 	} catch (std::exception &e) {
-		if (locked)
-			this->_entriesMutex.unlock();
+		if (!this->_running)
+			return;
 		this->_errorMutex.lock();
 		if (this->_errorMsg)
 			free(this->_errorMsg);

@@ -747,6 +747,10 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 
 InLobbyMenu::~InLobbyMenu()
 {
+	if (this->_hostlist)
+		this->_hostlist->requestStop();
+	for (auto &hostlist : this->_retiredHostlists)
+		hostlist->requestStop();
 	this->_saveRecentOpponent(true);
 	ptrMutex.lock();
 	activeMenu = nullptr;
@@ -796,6 +800,13 @@ void InLobbyMenu::_()
 
 int InLobbyMenu::onProcess()
 {
+	this->_retiredHostlists.erase(std::remove_if(
+		this->_retiredHostlists.begin(),
+		this->_retiredHostlists.end(),
+		[](const std::unique_ptr<SmallHostlist> &hostlist) {
+			return hostlist->isStopped();
+		}
+	), this->_retiredHostlists.end());
 	if (this->_disconnected)
 		return false;
 	try {
@@ -826,8 +837,10 @@ int InLobbyMenu::onProcess()
 		SokuLib::inputMgrs.input = inputs;
 		if (this->_hostlist && !this->_hostlist->update()) {
 			SokuLib::playBGM(this->_music.c_str());
-			this->_hostlist.reset();
+			this->_hostlist->requestStop();
+			this->_retiredHostlists.emplace_back(std::move(this->_hostlist));
 			this->_currentMachine = nullptr;
+			this->_nextArcadeActionAt = std::chrono::steady_clock::now() + std::chrono::seconds(1);
 			playSound(0x29);
 			return true;
 		}

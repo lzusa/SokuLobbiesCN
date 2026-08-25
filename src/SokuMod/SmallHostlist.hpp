@@ -7,6 +7,8 @@
 
 
 #include <SokuLib.hpp>
+#include <atomic>
+#include <condition_variable>
 #include <thread>
 #include <mutex>
 
@@ -130,17 +132,28 @@ private:
 	unsigned _playOffset = 0;
 	std::vector<std::unique_ptr<HostEntry>> _hostEntries;
 	std::vector<std::unique_ptr<PlayEntry>> _playEntries;
+	std::vector<std::unique_ptr<HostEntry>> _pendingHostEntries;
+	std::vector<std::unique_ptr<PlayEntry>> _pendingPlayEntries;
+	bool _hasPendingEntries = false;
+	bool _pendingNewHost = false;
 	std::mutex _entriesMutex;
 	SokuLib::MenuConnect *_parent;
 	SokuLib::Vector2i _pos;
 	float _ratio;
+	std::atomic_bool _running{true};
+	std::atomic_bool _workerStopped{false};
+	std::mutex _wakeMutex;
+	std::condition_variable _wakeCondition;
 
 	void _displaySokuCursor(SokuLib::Vector2i pos, SokuLib::Vector2u size);
 	void _refreshHostlist();
+	void _applyPendingEntries();
 
 public:
 	SmallHostlist(float ratio, SokuLib::Vector2i pos, SokuLib::MenuConnect *parent);
 	~SmallHostlist();
+	void requestStop();
+	bool isStopped() const;
 	bool update();
 	void render();
 };

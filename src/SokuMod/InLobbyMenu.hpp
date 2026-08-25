@@ -169,6 +169,7 @@ private:
 	std::vector<ArcadeMachine> _machines;
 	std::vector<ElevatorMachine> _elevators;
 	std::unique_ptr<class SmallHostlist> _hostlist;
+	std::vector<std::unique_ptr<class SmallHostlist>> _retiredHostlists;
 	std::vector<uint32_t> _insideElevator;
 	std::thread _connectThread;
 	unsigned char _elevatorCtr = 0;
