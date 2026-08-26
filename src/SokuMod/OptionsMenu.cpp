@@ -155,7 +155,7 @@ std::wstring localizedChoice(const std::string &label)
 	static const std::map<std::string, std::wstring> labels = {
 		{"English", L"\u82F1\u6587"}, {"Chinese", L"\u4E2D\u6587"}, {"All", L"\u6240\u6709\u4EBA"}, {"Battle Players", L"\u5BF9\u6218\u73A9\u5BB6"}, {"Never", L"\u4ECE\u4E0D"},
 		{"Off", L"\u5173\u95ED"}, {"On", L"\u5F00\u542F"}, {"Soft Blue", L"\u67D4\u548C\u84DD"}, {"Gold", L"\u91D1\u8272"}, {"Soft Pink", L"\u67D4\u548C\u7C89"},
-		{"Soft Green", L"\u67D4\u548C\u7EFF"}, {"Orange", L"\u6A59\u8272"}, {"White", L"\u767D\u8272"}, {"Auto", L"\u81EA\u52A8"},
+		{"Soft Green", L"\u67D4\u548C\u7EFF"}, {"Orange", L"\u6A59\u8272"}, {"Purple", L"\u7D2B\u8272"}, {"White", L"\u767D\u8272"}, {"Auto", L"\u81EA\u52A8"},
 		{"Open Folder", L"\u6253\u5F00\u6587\u4EF6\u5939"}, {"Restore Defaults", L"\u6062\u590D\u9ED8\u8BA4\u914D\u7F6E"}, {"Edit 1-9", L"\u7F16\u8F91 1-9"}
 	};
 	auto found = labels.find(label);
@@ -166,8 +166,16 @@ void createLocalizedSprite(SokuLib::DrawUtils::Sprite &sprite, const std::wstrin
 {
 	SokuLib::Vector2i size;
 	int textureId = 0;
-	if (!createTextTexture(textureId, text.c_str(), lobbyData->getFont(fontSize), bounds, &size, true))
+	auto &font = lobbyData->getFont(fontSize);
+	const auto originalOffsetX = font.description.offsetX;
+	const unsigned leftPadding = chineseLanguage ? 0 : 2;
+
+	font.description.offsetX = originalOffsetX + leftPadding;
+	auto created = createTextTexture(textureId, text.c_str(), font, bounds, &size, true);
+	font.description.offsetX = originalOffsetX;
+	if (!created)
 		return;
+	size.x = (std::min)(bounds.x, size.x + static_cast<int>(leftPadding));
 	sprite.texture.setHandle(textureId, bounds.to<unsigned>());
 	sprite.setSize(size.to<unsigned>());
 	sprite.rect = {0, 0, size.x, size.y};
@@ -299,7 +307,7 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 	});
 	this->_addOption({
 		"Opponent Chat Color",
-		{{"Soft Blue", 0x7FA6D9}, {"Gold", 0xE0B85C}, {"Soft Pink", 0xD990B5}, {"Soft Green", 0x79B88A}, {"Orange", 0xD98B5F}, {"White", 0xFFFFFF}},
+		{{"Soft Blue", 0x7FA6D9}, {"Gold", 0xE0B85C}, {"Soft Pink", 0xD990B5}, {"Soft Green", 0x79B88A}, {"Orange", 0xD98B5F}, {"Purple", 0xFF00FF}, {"White", 0xFFFFFF}},
 		[] { return opponentChatColor & 0xFFFFFF; },
 		[](unsigned value) {
 			wchar_t buffer[7];
