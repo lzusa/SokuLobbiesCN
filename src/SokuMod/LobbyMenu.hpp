@@ -101,6 +101,7 @@ public:
 	void setActive();
 	void _refreshName();
 	void onHostPrefChanged();
+	void onLanguageChanged();
 };
 
 #endif //SOKULOBBIES_LOBBYMENU_HPP

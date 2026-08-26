@@ -54,6 +54,7 @@ private:
 	void _updateMessageEditor();
 	void _renderMessageEditor();
 	void _updateChatKeyCapture();
+	void _refreshLanguage();
 
 public:
 	explicit OptionsMenu(LobbyMenu *parent);

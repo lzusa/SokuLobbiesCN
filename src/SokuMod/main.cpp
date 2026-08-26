@@ -250,6 +250,7 @@ char redirectIp[64];
 char *wineVersion = nullptr;
 unsigned hostPref;
 unsigned chatKey;
+bool chineseLanguage = false;
 std::wstring quickMessages[9];
 unsigned lobbyJoinTries;
 unsigned lobbyJoinInterval;
@@ -1331,6 +1332,11 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE hPar
 	servPort = GetPrivateProfileIntW(L"Lobby", L"Port", 5254, profilePath);
 	hostPort = GetPrivateProfileIntW(L"Lobby", L"HostPort", 10800, profilePath);
 	chatKey = GetPrivateProfileIntW(L"Lobby", L"ChatKey", VK_RETURN, profilePath);
+	{
+		wchar_t language[16];
+		GetPrivateProfileStringW(L"Lobby", L"Language", L"English", language, sizeof(language) / sizeof(*language), profilePath);
+		chineseLanguage = _wcsicmp(language, L"Chinese") == 0 || _wcsicmp(language, L"\u4E2D\u6587") == 0;
+	}
 	loadQuickMessages();
 	lobbyJoinTries = GetPrivateProfileIntW(L"Lobby", L"JoinTries", 15, profilePath);
 	lobbyJoinInterval = GetPrivateProfileIntW(L"Lobby", L"JoinInterval", 1, profilePath);

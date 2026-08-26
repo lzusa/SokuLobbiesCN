@@ -2800,16 +2800,19 @@ void InLobbyMenu::_initQuickMessageSprites()
 
 void InLobbyMenu::_initChatPopupModeSprites()
 {
-	const char *labels[3] = {
-		"Chat popup: All players",
-		"Chat popup: Battle players only",
-		"Chat popup: Never"
+	const wchar_t *labels[3] = {
+		chineseLanguage ? L"\u804A\u5929\u5F39\u51FA\uFF1A\u6240\u6709\u4EBA" : L"Chat popup: All players",
+		chineseLanguage ? L"\u804A\u5929\u5F39\u51FA\uFF1A\u4EC5\u5BF9\u6218\u73A9\u5BB6" : L"Chat popup: Battle players only",
+		chineseLanguage ? L"\u804A\u5929\u5F39\u51FA\uFF1A\u4ECE\u4E0D" : L"Chat popup: Never"
 	};
 	for (unsigned i = 0; i < 3; i++) {
-		this->_chatPopupModeSprites[i].texture.createFromText(labels[i], this->_textBubbleFont, {300, 28});
-		this->_chatPopupModeSprites[i].rect.width = this->_chatPopupModeSprites[i].texture.getSize().x;
-		this->_chatPopupModeSprites[i].rect.height = this->_chatPopupModeSprites[i].texture.getSize().y;
-		this->_chatPopupModeSprites[i].setSize(this->_chatPopupModeSprites[i].texture.getSize());
+		int textureId = 0;
+		SokuLib::Vector2i size;
+		if (!createTextTexture(textureId, labels[i], this->_textBubbleFont, {300, 28}, &size, true))
+			continue;
+		this->_chatPopupModeSprites[i].texture.setHandle(textureId, {300, 28});
+		this->_chatPopupModeSprites[i].rect = {0, 0, size.x, size.y};
+		this->_chatPopupModeSprites[i].setSize(size.to<unsigned>());
 	}
 }
 

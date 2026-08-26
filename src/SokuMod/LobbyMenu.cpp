@@ -100,10 +100,7 @@ LobbyMenu::LobbyMenu(SokuLib::MenuConnect *parent) :
 	this->_title.rect.width = this->_title.getSize().x;
 	this->_title.rect.height = this->_title.getSize().y;
 
-	this->_ui.texture.loadFromFile((folder / "assets/menu/lobbylist.png").string().c_str());
-	this->_ui.setSize(this->_ui.texture.getSize());
-	this->_ui.rect.width = this->_ui.getSize().x;
-	this->_ui.rect.height = this->_ui.getSize().y;
+	this->onLanguageChanged();
 
 	this->_hidden.texture.loadFromFile((folder / "assets/avatars/hidden.png").string().c_str());
 	this->_hidden.setSize(this->_hidden.texture.getSize());
@@ -762,6 +759,17 @@ void LobbyMenu::setActive()
 void LobbyMenu::onHostPrefChanged()
 {
 	this->_loadedSettings.settings.hostPref = static_cast<Lobbies::HostPreference>(hostPref);
+}
+
+void LobbyMenu::onLanguageChanged()
+{
+	auto folder = std::filesystem::path(profileFolderPath);
+	auto lobbyList = folder / (chineseLanguage ? "assets/menu/lobbylist-cn.png" : "assets/menu/lobbylist.png");
+	if (!this->_ui.texture.loadFromFile(lobbyList.string().c_str()) && chineseLanguage)
+		this->_ui.texture.loadFromFile((folder / "assets/menu/lobbylist.png").string().c_str());
+	this->_ui.setSize(this->_ui.texture.getSize());
+	this->_ui.rect.width = this->_ui.getSize().x;
+	this->_ui.rect.height = this->_ui.getSize().y;
 }
 
 void LobbyMenu::_masterServerLoop()

@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <map>
 #include <shellapi.h>
 #include <../directx/dinput.h>
 #include "IniConfig.hpp"
@@ -133,6 +134,44 @@ bool saveString(const wchar_t *key, const wchar_t *value)
 	return IniConfig::writeLobbyString(profilePath, key, value);
 }
 
+std::wstring localizedOptionName(const std::string &name)
+{
+	if (!chineseLanguage)
+		return std::wstring(name.begin(), name.end());
+	static const std::map<std::string, std::wstring> labels = {
+		{"Language", L"\u8BED\u8A00"}, {"Chat Popup Mode", L"\u804A\u5929\u5F39\u51FA\u6A21\u5F0F"}, {"Text Bubbles", L"\u804A\u5929\u6C14\u6CE1"},
+		{"Max Chat Messages", L"\u6700\u5927\u804A\u5929\u8BB0\u5F55"}, {"Chat Key", L"\u804A\u5929\u6846\u6309\u952E"}, {"Opponent Chat Color", L"\u5BF9\u624B\u804A\u5929\u989C\u8272"},
+		{"Host IP", L"\u5BF9\u6218 IP"}, {"Chat Logs", L"\u804A\u5929\u65E5\u5FD7"}, {"Reset Config", L"\u91CD\u7F6E\u914D\u7F6E"}, {"Quick Messages", L"\u5FEB\u6377\u5BF9\u8BDD"}
+	};
+	auto found = labels.find(name);
+	return found == labels.end() ? std::wstring(name.begin(), name.end()) : found->second;
+}
+
+std::wstring localizedChoice(const std::string &label)
+{
+	if (!chineseLanguage)
+		return std::wstring(label.begin(), label.end());
+	static const std::map<std::string, std::wstring> labels = {
+		{"English", L"\u82F1\u6587"}, {"Chinese", L"\u4E2D\u6587"}, {"All", L"\u6240\u6709\u4EBA"}, {"Battle Players", L"\u5BF9\u6218\u73A9\u5BB6"}, {"Never", L"\u4ECE\u4E0D"},
+		{"Off", L"\u5173\u95ED"}, {"On", L"\u5F00\u542F"}, {"Soft Blue", L"\u67D4\u548C\u84DD"}, {"Gold", L"\u91D1\u8272"}, {"Soft Pink", L"\u67D4\u548C\u7C89"},
+		{"Soft Green", L"\u67D4\u548C\u7EFF"}, {"Orange", L"\u6A59\u8272"}, {"White", L"\u767D\u8272"}, {"Auto", L"\u81EA\u52A8"},
+		{"Open Folder", L"\u6253\u5F00\u6587\u4EF6\u5939"}, {"Restore Defaults", L"\u6062\u590D\u9ED8\u8BA4\u914D\u7F6E"}, {"Edit 1-9", L"\u7F16\u8F91 1-9"}
+	};
+	auto found = labels.find(label);
+	return found == labels.end() ? std::wstring(label.begin(), label.end()) : found->second;
+}
+
+void createLocalizedSprite(SokuLib::DrawUtils::Sprite &sprite, const std::wstring &text, unsigned fontSize, SokuLib::Vector2i bounds)
+{
+	SokuLib::Vector2i size;
+	int textureId = 0;
+	if (!createTextTexture(textureId, text.c_str(), lobbyData->getFont(fontSize), bounds, &size, true))
+		return;
+	sprite.texture.setHandle(textureId, bounds.to<unsigned>());
+	sprite.setSize(size.to<unsigned>());
+	sprite.rect = {0, 0, size.x, size.y};
+}
+
 void displayTranslucentCursor(SokuLib::Vector2i pos, SokuLib::Vector2u size)
 {
 	SokuLib::Sprite (&sprites)[3] = *(SokuLib::Sprite (*)[3])0x89A6C0;
@@ -182,6 +221,19 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 	this->_status.setPosition({52, 382});
 	this->_status.tint = SokuLib::Color{0xFF, 0x80, 0x80, 0xFF};
 
+	this->_addOption({
+		"Language",
+		{{"English", 0}, {"Chinese", 1}},
+		[] { return chineseLanguage ? 1u : 0u; },
+		[this](unsigned value) {
+			if (!saveString(L"Language", value ? L"Chinese" : L"English"))
+				return false;
+			chineseLanguage = value != 0;
+			this->_parent->onLanguageChanged();
+			this->_refreshLanguage();
+			return true;
+		}
+	});
 	this->_addOption({
 		"Chat Popup Mode",
 		{{"All", CHAT_POPUP_ALL}, {"Battle Players", CHAT_POPUP_OPPONENTS}, {"Never", CHAT_POPUP_NEVER}},
@@ -349,6 +401,7 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 		}
 	});
 	this->_initMessageEditor();
+	this->_refreshLanguage();
 }
 
 OptionsMenu::~OptionsMenu()
@@ -370,10 +423,7 @@ void OptionsMenu::_addOption(Option option)
 		option.index = static_cast<unsigned>(option.choices.size() - 1);
 	} else
 		option.index = static_cast<unsigned>(std::distance(option.choices.begin(), found));
-	option.labelSprite.texture.createFromText(option.name.c_str(), lobbyData->getFont(16), {300, 24}, &size);
-	option.labelSprite.setSize(size.to<unsigned>());
-	option.labelSprite.rect.width = size.x;
-	option.labelSprite.rect.height = size.y;
+	createLocalizedSprite(option.labelSprite, localizedOptionName(option.name), 16, {300, 24});
 	this->_options.emplace_back(std::move(option));
 	this->_refreshValue(this->_options.back());
 }
@@ -381,10 +431,19 @@ void OptionsMenu::_addOption(Option option)
 void OptionsMenu::_refreshValue(Option &option)
 {
 	SokuLib::Vector2i size;
-	option.valueSprite.texture.createFromText(option.choices[option.index].label.c_str(), lobbyData->getFont(16), {260, 24}, &size);
-	option.valueSprite.setSize(size.to<unsigned>());
-	option.valueSprite.rect.width = size.x;
-	option.valueSprite.rect.height = size.y;
+	createLocalizedSprite(option.valueSprite, localizedChoice(option.choices[option.index].label), 16, {260, 24});
+}
+
+void OptionsMenu::_refreshLanguage()
+{
+	createLocalizedSprite(this->_title, chineseLanguage ? L"\u5927\u5385\u9009\u9879" : L"Lobby Options", 24, {400, 40});
+	createLocalizedSprite(this->_hint, chineseLanguage ? L"\u786E\u8BA4 / \u5DE6\u53F3\uFF1A\u4FEE\u6539    \u8FD4\u56DE\u952E / ESC\uFF1A\u8FD4\u56DE" : L"A / Left / Right: Change    B / ESC: Back", 12, {540, 20});
+	createLocalizedSprite(this->_messagesTitle, chineseLanguage ? L"\u5FEB\u6377\u5BF9\u8BDD" : L"Quick Messages", 22, {400, 36});
+	createLocalizedSprite(this->_messagesHint, chineseLanguage ? L"\u786E\u8BA4 / Enter\uFF1A\u7F16\u8F91    \u8FD4\u56DE\u952E / ESC\uFF1A\u8FD4\u56DE" : L"A / Enter: Edit    B / ESC: Back", 12, {540, 20});
+	for (auto &option : this->_options) {
+		createLocalizedSprite(option.labelSprite, localizedOptionName(option.name), 16, {300, 24});
+		this->_refreshValue(option);
+	}
 }
 
 void OptionsMenu::_showSaveError()

@@ -38,6 +38,7 @@ extern bool showTextBubbles;
 extern ChatPopupMode chatPopupMode;
 extern unsigned hostPref;
 extern unsigned chatKey;
+extern bool chineseLanguage;
 extern std::wstring quickMessages[9];
 extern unsigned short servPort;
 extern unsigned short hostPort;
