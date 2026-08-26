@@ -553,12 +553,15 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		this->_openMessageBox(23, msg, std::string("Notification from server"), MB_ICONINFORMATION);
 	};
 	this->_connection->onMsg = [this](int32_t channel, int32_t player, const std::string &msg){
+		bool privateMessage = channel == -1;
 		this->_logChatToFile(player, msg);
 		this->_showEmoteBubble(player, msg);
-		this->_showTextBubble(player, msg);
+		this->_showTextBubble(player, msg, privateMessage);
 		std::optional<unsigned> colorOverride;
 		bool opponentDisconnected = false;
 		bool opponentMessage = false;
+		if (privateMessage)
+			colorOverride = opponentChatColor;
 		{
 			std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
 			if (this->_recentOpponent) {
@@ -1854,6 +1857,7 @@ void InLobbyMenu::_processPendingTextureWork()
 	struct TextBubbleWork {
 		uint32_t player;
 		std::string message;
+		bool privateMessage;
 		std::chrono::steady_clock::time_point receivedAt;
 	};
 	std::vector<TextBubbleWork> textBubbles;
@@ -1879,7 +1883,7 @@ void InLobbyMenu::_processPendingTextureWork()
 			if (work == this->_pendingTextBubbles.end())
 				continue;
 			if (now - work->second.receivedAt < TEXT_BUBBLE_LIFETIME)
-				textBubbles.push_back({work->first, std::move(work->second.message), work->second.receivedAt});
+				textBubbles.push_back({work->first, std::move(work->second.message), work->second.privateMessage, work->second.receivedAt});
 			this->_pendingTextBubbles.erase(work);
 			i++;
 		}
@@ -1898,7 +1902,7 @@ void InLobbyMenu::_processPendingTextureWork()
 	for (const auto &[player, name] : playerNames)
 		this->_buildPlayerName(player, name);
 	for (const auto &work : textBubbles)
-		this->_buildTextBubble(work.player, work.message, work.receivedAt);
+		this->_buildTextBubble(work.player, work.message, work.privateMessage, work.receivedAt);
 }
 
 void InLobbyMenu::_showEmoteBubble(unsigned player, const std::string &msg)
@@ -1991,17 +1995,17 @@ void InLobbyMenu::_renderEmoteBubbles(const std::unordered_map<uint32_t, const P
 	}
 }
 
-void InLobbyMenu::_showTextBubble(unsigned player, const std::string &msg)
+void InLobbyMenu::_showTextBubble(unsigned player, const std::string &msg, bool privateMessage)
 {
 	if (!showTextBubbles || player == 0 || SokuLib::sceneId != SokuLib::SCENE_TITLE)
 		return;
 	std::lock_guard<std::mutex> lock(this->_pendingTextureWorkMutex);
 	if (this->_pendingTextBubbles.find(player) == this->_pendingTextBubbles.end())
 		this->_pendingTextBubbleOrder.push(player);
-	this->_pendingTextBubbles[player] = {msg, std::chrono::steady_clock::now()};
+	this->_pendingTextBubbles[player] = {msg, privateMessage, std::chrono::steady_clock::now()};
 }
 
-void InLobbyMenu::_buildTextBubble(unsigned player, const std::string &msg, std::chrono::steady_clock::time_point receivedAt)
+void InLobbyMenu::_buildTextBubble(unsigned player, const std::string &msg, bool privateMessage, std::chrono::steady_clock::time_point receivedAt)
 {
 	auto bodyStart = msg.find("]: ");
 	if (bodyStart == std::string::npos)
@@ -2084,6 +2088,7 @@ void InLobbyMenu::_buildTextBubble(unsigned player, const std::string &msg, std:
 		bubble.textSize[i] = textSizes[i];
 	}
 	bubble.lineCount = lineCount;
+	bubble.privateMessage = privateMessage;
 	bubble.startedAt = receivedAt;
 }
 
@@ -2139,15 +2144,28 @@ void InLobbyMenu::_renderTextBubbles(const std::unordered_map<uint32_t, const Pl
 
 		SokuLib::DrawUtils::RectangleShape frame;
 		SokuLib::DrawUtils::RectangleShape tail;
+		SokuLib::Color borderColor{0x78, 0x80, 0x90, alpha};
+		SokuLib::Color fillColor{0xF0, 0xF2, 0xF5, static_cast<unsigned char>(alpha * 0.9f)};
+		if (it->second.privateMessage) {
+			borderColor = SokuLib::Color{
+				static_cast<unsigned char>((opponentChatColor >> 16) & 0xFF),
+				static_cast<unsigned char>((opponentChatColor >> 8) & 0xFF),
+				static_cast<unsigned char>(opponentChatColor & 0xFF), alpha};
+			fillColor = SokuLib::Color{
+				static_cast<unsigned char>((borderColor.r + 0xFF * 3) / 4),
+				static_cast<unsigned char>((borderColor.g + 0xFF * 3) / 4),
+				static_cast<unsigned char>((borderColor.b + 0xFF * 3) / 4),
+				static_cast<unsigned char>(alpha * 0.94f)};
+		}
 		frame.setPosition({x, y});
 		frame.setSize({static_cast<unsigned>(bubbleWidth), static_cast<unsigned>(bubbleHeight)});
-		frame.setBorderColor(SokuLib::Color{0x78, 0x80, 0x90, alpha});
-		frame.setFillColor(SokuLib::Color{0xF0, 0xF2, 0xF5, static_cast<unsigned char>(alpha * 0.9f)});
+		frame.setBorderColor(borderColor);
+		frame.setFillColor(fillColor);
 		frame.draw();
 		tail.setPosition({x + bubbleWidth / 2 - 3, y + bubbleHeight - 1});
 		tail.setSize({6, 7});
-		tail.setBorderColor(SokuLib::Color{0x78, 0x80, 0x90, alpha});
-		tail.setFillColor(SokuLib::Color{0xF0, 0xF2, 0xF5, static_cast<unsigned char>(alpha * 0.9f)});
+		tail.setBorderColor(borderColor);
+		tail.setFillColor(fillColor);
 		tail.draw();
 
 		for (unsigned i = 0; i < it->second.lineCount; i++) {
@@ -2410,6 +2428,37 @@ void InLobbyMenu::_inputBoxUpdate()
 		this->_pasteFromClipboard();
 		goto ret_reset_keysPressed;
 	}
+	if (this->keysPressed[VK_TAB] && this->immComposition.empty()) {
+		this->_completePrivateMessageRecipient();
+		goto ret_reset_keysPressed;
+	}
+	if (!this->_privateMessageCompletions.empty() && this->_privateMessageCompletionTimer) {
+		if (this->keysPressed[VK_UP] || this->keysPressed[VK_DOWN]) {
+			std::lock_guard<std::mutex> textLock(this->_textMutex);
+			if (this->keysPressed[VK_UP])
+				this->_privateMessageCompletionIndex = (this->_privateMessageCompletionIndex + this->_privateMessageCompletions.size() - 1) % this->_privateMessageCompletions.size();
+			else
+				this->_privateMessageCompletionIndex = (this->_privateMessageCompletionIndex + 1) % this->_privateMessageCompletions.size();
+			constexpr unsigned visibleCompletions = 10;
+			if (this->_privateMessageCompletionIndex < this->_privateMessageCompletionScroll)
+				this->_privateMessageCompletionScroll = this->_privateMessageCompletionIndex;
+			else if (this->_privateMessageCompletionIndex >= this->_privateMessageCompletionScroll + visibleCompletions)
+				this->_privateMessageCompletionScroll = this->_privateMessageCompletionIndex - visibleCompletions + 1;
+			this->_applyPrivateMessageCompletion();
+			playSound(0x27);
+			goto ret_reset_keysPressed;
+		}
+		if (this->keysPressed[VK_RETURN]) {
+			{
+				std::lock_guard<std::mutex> textLock(this->_textMutex);
+				this->_applyPrivateMessageCompletion();
+			}
+			this->_privateMessageCompletions.clear();
+			this->_privateMessageCompletionTimer = 0;
+			playSound(0x28);
+			goto ret_reset_keysPressed;
+		}
+	}
 	if (this->keysPressed[VK_UP]) {
 		playSound(0x27);
 		this->_chatOffset += SCROLL_AMOUNT;
@@ -2534,8 +2583,10 @@ void InLobbyMenu::_inputBoxUpdate()
 			}
 		}
 	}
-	if (this->textChanged)
+	if (this->textChanged) {
+		this->_refreshPrivateMessageCompletions();
 		this->_updateCompositionSprite();
+	}
 	this->_textMutex.unlock();
 	ret_reset_keysPressed:
 	memset(this->keysPressed, 0, sizeof(this->keysPressed));
@@ -2773,6 +2824,8 @@ void InLobbyMenu::_initInputBox()
 	this->_buffer.clear();
 	this->_buffer.push_back(0);
 	this->_clearSelection();
+	this->_privateMessageCompletions.clear();
+	this->_privateMessageCompletionTimer = 0;
 
 	this->textChanged = 3;
 	this->_updateCompositionSprite();
@@ -2934,6 +2987,8 @@ void InLobbyMenu::_pasteFromClipboard()
 		clip.resize(spaceLeft);
 	this->_deleteSelection();
 	this->_buffer.insert(this->_buffer.begin() + this->_textCursorPosIndex, clip.begin(), clip.end());
+	this->_privateMessageCompletions.clear();
+	this->_privateMessageCompletionTimer = 0;
 	this->_updateTextCursor(this->_textCursorPosIndex + clip.size());
 	this->textChanged |= 1;
 	playSound(0x27);
@@ -3061,6 +3116,8 @@ void InLobbyMenu::_sendEmote(const LobbyData::Emote &emote)
 
 void InLobbyMenu::updateChat(bool inGame)
 {
+	if (this->_privateMessageCompletionTimer)
+		this->_privateMessageCompletionTimer--;
 	if (this->_disconnected)
 		return;
 	const bool outsideLobby = SokuLib::sceneId != SokuLib::SCENE_TITLE;
@@ -3326,6 +3383,7 @@ void InLobbyMenu::renderChat()
 		}
 	}
 	if (this->_editingText) {
+		this->_renderPrivateMessageCompletions();
 		for (auto &sprite : this->_textSprite) {
 			//SokuLib::SpriteEx s;
 			//auto handle = sprite.texture.releaseHandle();
@@ -3507,6 +3565,168 @@ void InLobbyMenu::_setEscapeSource(bool &source, uint64_t &generation, bool down
 		this->_keyboardEscapeScene = SokuLib::sceneId;
 	}
 	this->_hotkeyEvents.push_back({VK_ESCAPE, true, mapped, generation, owner, SokuLib::sceneId});
+}
+
+void InLobbyMenu::_completePrivateMessageRecipient()
+{
+	std::lock_guard<std::mutex> textLock(this->_textMutex);
+	if (this->_buffer.size() <= 5) {
+		playSound(0x29);
+		return;
+	}
+	std::wstring text(this->_buffer.begin(), this->_buffer.end() - 1);
+	if (text.compare(0, 5, L"/msg ") != 0 || this->_textCursorPosIndex < 5) {
+		this->_privateMessageCompletions.clear();
+		this->_privateMessageCompletionTimer = 0;
+		playSound(0x29);
+		return;
+	}
+	auto targetEnd = text.find(L' ', 5);
+	if (targetEnd == std::wstring::npos)
+		targetEnd = text.size();
+	bool cycleExisting = !this->_privateMessageCompletions.empty() &&
+		this->_textCursorPosIndex <= static_cast<int>(targetEnd + (targetEnd < text.size()));
+	if (!cycleExisting)
+		this->_refreshPrivateMessageCompletions();
+	else
+		this->_privateMessageCompletionIndex = (this->_privateMessageCompletionIndex + 1) % this->_privateMessageCompletions.size();
+	constexpr unsigned visibleCompletions = 10;
+	if (this->_privateMessageCompletionIndex < this->_privateMessageCompletionScroll)
+		this->_privateMessageCompletionScroll = this->_privateMessageCompletionIndex;
+	else if (this->_privateMessageCompletionIndex >= this->_privateMessageCompletionScroll + visibleCompletions)
+		this->_privateMessageCompletionScroll = this->_privateMessageCompletionIndex - visibleCompletions + 1;
+	if (this->_privateMessageCompletions.empty()) {
+		this->_privateMessageCompletionTimer = 0;
+		playSound(0x29);
+		return;
+	}
+	this->_applyPrivateMessageCompletion();
+	playSound(0x27);
+}
+
+void InLobbyMenu::_refreshPrivateMessageCompletions()
+{
+	std::wstring text(this->_buffer.begin(), this->_buffer.end() - 1);
+	if (text.compare(0, 5, L"/msg ") != 0 || this->_textCursorPosIndex < 5) {
+		this->_privateMessageCompletions.clear();
+		this->_privateMessageCompletionTimer = 0;
+		return;
+	}
+	auto targetEnd = text.find(L' ', 5);
+	if (targetEnd == std::wstring::npos)
+		targetEnd = text.size();
+	if (this->_textCursorPosIndex > static_cast<int>(targetEnd)) {
+		this->_privateMessageCompletions.clear();
+		this->_privateMessageCompletionTimer = 0;
+		return;
+	}
+	std::wstring query = text.substr(5, targetEnd - 5);
+	if (!query.empty() && query.front() == L'@')
+		query.erase(query.begin());
+	std::transform(query.begin(), query.end(), query.begin(), towlower);
+	auto fuzzyMatch = [](const std::wstring &value, const std::wstring &needle) {
+		auto next = needle.begin();
+		for (wchar_t chr : value)
+			if (next != needle.end() && chr == *next)
+				next++;
+		return next == needle.end();
+	};
+	this->_privateMessageCompletions.clear();
+	auto me = this->_connection->getMe();
+	for (const auto &[id, player] : this->_playersById) {
+		if (!player || (me && id == me->id))
+			continue;
+		std::wstring name;
+		try {
+			name = convertEncoding<char, wchar_t, UTF8Decode, UTF16Encode>(player->name);
+		} catch (...) {
+			continue;
+		}
+		std::wstring lowered = name;
+		std::transform(lowered.begin(), lowered.end(), lowered.begin(), towlower);
+		auto idText = std::to_wstring(id);
+		if (!query.empty() && !fuzzyMatch(lowered, query) && idText.find(query) != 0)
+			continue;
+		this->_privateMessageCompletions.push_back({id, std::move(name), {}});
+	}
+	std::sort(this->_privateMessageCompletions.begin(), this->_privateMessageCompletions.end(), [&query](const auto &left, const auto &right) {
+		auto rank = [&query](const std::wstring &name) {
+			std::wstring lowered = name;
+			std::transform(lowered.begin(), lowered.end(), lowered.begin(), towlower);
+			if (lowered.find(query) == 0)
+				return 0;
+			if (lowered.find(query) != std::wstring::npos)
+				return 1;
+			return 2;
+		};
+		auto leftRank = rank(left.playerName);
+		auto rightRank = rank(right.playerName);
+		return leftRank != rightRank ? leftRank < rightRank : left.playerName < right.playerName;
+	});
+	this->_privateMessageCompletionIndex = 0;
+	this->_privateMessageCompletionScroll = 0;
+	for (auto &entry : this->_privateMessageCompletions) {
+		auto label = entry.playerName + L"  (#" + std::to_wstring(entry.playerId) + L")";
+		int textureId = 0;
+		SokuLib::Vector2i size;
+		if (createTextTexture(textureId, label.c_str(), this->_textBubbleFont, {300, 22}, &size, true)) {
+			entry.label.texture.setHandle(textureId, {300, 22});
+			entry.label.rect = {0, 0, size.x, size.y};
+			entry.label.setSize(size.to<unsigned>());
+		}
+	}
+	this->_privateMessageCompletionTimer = this->_privateMessageCompletions.empty() ? 0 : 240;
+}
+
+void InLobbyMenu::_applyPrivateMessageCompletion()
+{
+	if (this->_privateMessageCompletions.empty())
+		return;
+	std::wstring text(this->_buffer.begin(), this->_buffer.end() - 1);
+	auto targetEnd = text.find(L' ', 5);
+	if (targetEnd == std::wstring::npos)
+		targetEnd = text.size();
+	auto idText = std::to_wstring(this->_privateMessageCompletions[this->_privateMessageCompletionIndex].playerId);
+	this->_buffer.erase(this->_buffer.begin() + 5, this->_buffer.begin() + targetEnd);
+	this->_buffer.insert(this->_buffer.begin() + 5, idText.begin(), idText.end());
+	auto newEnd = 5 + idText.size();
+	if (newEnd >= this->_buffer.size() - 1 || this->_buffer[newEnd] != L' ')
+		this->_buffer.insert(this->_buffer.begin() + newEnd, L' ');
+	this->_updateTextCursor(static_cast<int>(newEnd + 1));
+	this->_clearSelection();
+	this->textChanged |= 1;
+	this->_updateCompositionSprite();
+	this->_privateMessageCompletionTimer = 240;
+}
+
+void InLobbyMenu::_renderPrivateMessageCompletions()
+{
+	if (!this->_privateMessageCompletionTimer || this->_privateMessageCompletions.empty())
+		return;
+	constexpr unsigned maxVisible = 10;
+	constexpr int panelY = 202;
+	auto first = min(this->_privateMessageCompletionScroll, static_cast<unsigned>(this->_privateMessageCompletions.size() - 1));
+	auto count = min(maxVisible, static_cast<unsigned>(this->_privateMessageCompletions.size() - first));
+	int height = 10 + static_cast<int>(count) * 24;
+	SokuLib::DrawUtils::RectangleShape panel;
+	panel.setPosition({292, panelY});
+	panel.setSize({316, static_cast<unsigned>(height)});
+	panel.setBorderColor(SokuLib::Color{0x7F, 0xA6, 0xD9, 0xFF});
+	panel.setFillColor(SokuLib::Color{0x10, 0x18, 0x28, 0xEE});
+	panel.draw();
+	for (unsigned i = 0; i < count; i++) {
+		auto index = first + i;
+		auto &entry = this->_privateMessageCompletions[index];
+		if (index == this->_privateMessageCompletionIndex) {
+			SokuLib::DrawUtils::RectangleShape selected;
+			selected.setPosition({296, panelY + 5 + static_cast<int>(i) * 24});
+			selected.setSize({308, 22});
+			selected.setFillColor(SokuLib::Color{0x45, 0x62, 0x88, 0xD8});
+			selected.draw();
+		}
+		entry.label.setPosition({302, panelY + 6 + static_cast<int>(i) * 24});
+		entry.label.draw();
+	}
 }
 
 InLobbyMenu::EscapeOwner InLobbyMenu::_classifyEscapeOwner() const

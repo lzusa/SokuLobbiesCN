@@ -150,11 +150,13 @@ private:
 		SokuLib::DrawUtils::Sprite text[2];
 		SokuLib::Vector2i textSize[2];
 		unsigned lineCount = 0;
+		bool privateMessage = false;
 		std::chrono::steady_clock::time_point startedAt;
 	};
 	std::map<uint32_t, PlayerTextBubble> _playerTextBubbles;
 	struct PendingTextBubble {
 		std::string message;
+		bool privateMessage;
 		std::chrono::steady_clock::time_point receivedAt;
 	};
 	std::map<uint32_t, PlayerData> _extraPlayerData;
@@ -226,6 +228,15 @@ private:
 	SokuLib::Vector2i _quickMessageTextSizes[9];
 	SokuLib::DrawUtils::Sprite _chatPopupModeSprites[3];
 	unsigned _chatPopupModeTimer = 0;
+	struct PrivateMessageCompletion {
+		uint32_t playerId;
+		std::wstring playerName;
+		SokuLib::DrawUtils::Sprite label;
+	};
+	std::vector<PrivateMessageCompletion> _privateMessageCompletions;
+	unsigned _privateMessageCompletionIndex = 0;
+	unsigned _privateMessageCompletionScroll = 0;
+	unsigned _privateMessageCompletionTimer = 0;
 	std::map<unsigned, int> _textSize;
 
 	void _updateMessageSprite(SokuLib::Vector2i pos, unsigned int remaining, SokuLib::Vector2i realSize, SokuLib::DrawUtils::Sprite &sprite, unsigned char alpha);
@@ -235,8 +246,8 @@ private:
 	void _saveRecentOpponent(bool leavingLobby = false);
 	void _showEmoteBubble(unsigned player, const std::string &msg);
 	void _renderEmoteBubbles(const std::unordered_map<uint32_t, const Player *> &playersById);
-	void _showTextBubble(unsigned player, const std::string &msg);
-	void _buildTextBubble(unsigned player, const std::string &msg, std::chrono::steady_clock::time_point receivedAt);
+	void _showTextBubble(unsigned player, const std::string &msg, bool privateMessage = false);
+	void _buildTextBubble(unsigned player, const std::string &msg, bool privateMessage, std::chrono::steady_clock::time_point receivedAt);
 	void _clearTextBubbles();
 	void _renderTextBubbles(const std::unordered_map<uint32_t, const Player *> &playersById);
 	void _queuePlayerName(unsigned player, const std::string &name);
@@ -266,6 +277,10 @@ private:
 	std::wstring _getSelectedText() const;
 	void _copySelectionToClipboard();
 	void _pasteFromClipboard();
+	void _completePrivateMessageRecipient();
+	void _refreshPrivateMessageCompletions();
+	void _applyPrivateMessageCompletion();
+	void _renderPrivateMessageCompletions();
 	void _updateTextCursor(int pos);
 	void _sendMessage(const std::wstring &msg);
 	void _unhook();
