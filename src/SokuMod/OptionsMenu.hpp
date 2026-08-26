@@ -35,6 +35,8 @@ private:
 	SokuLib::DrawUtils::Sprite _hint;
 	SokuLib::DrawUtils::Sprite _status;
 	bool _editingMessages = false;
+	bool _capturingChatKey = false;
+	bool _chatKeyCaptureArmed = false;
 	unsigned _messageCursor = 0;
 	SokuLib::DrawUtils::Sprite _messagesTitle;
 	SokuLib::DrawUtils::Sprite _messagesHint;
@@ -51,6 +53,7 @@ private:
 	void _openMessageEditor(unsigned index);
 	void _updateMessageEditor();
 	void _renderMessageEditor();
+	void _updateChatKeyCapture();
 
 public:
 	explicit OptionsMenu(LobbyMenu *parent);

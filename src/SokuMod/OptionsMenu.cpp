@@ -21,6 +21,40 @@ std::string decimalValue(unsigned value)
 	return "Custom (" + std::to_string(value) + ")";
 }
 
+std::string keyName(unsigned key)
+{
+	if (key == VK_RETURN)
+		return "Enter";
+	if (key == VK_SPACE)
+		return "Space";
+	UINT scan = MapVirtualKeyA(key, MAPVK_VK_TO_VSC);
+	if (key == VK_LEFT || key == VK_UP || key == VK_RIGHT || key == VK_DOWN || key == VK_PRIOR || key == VK_NEXT || key == VK_END || key == VK_HOME || key == VK_INSERT || key == VK_DELETE)
+		scan |= 0x100;
+	char buffer[64];
+	if (GetKeyNameTextA(static_cast<LONG>(scan << 16), buffer, sizeof(buffer)))
+		return buffer;
+	char fallback[16];
+	std::snprintf(fallback, sizeof(fallback), "VK 0x%02X", key & 0xFF);
+	return fallback;
+}
+
+bool parseUnsignedInput(const std::wstring &input, unsigned minimum, unsigned maximum, unsigned &value)
+{
+	auto first = input.find_first_not_of(L" \t");
+	auto last = input.find_last_not_of(L" \t");
+	if (first == std::wstring::npos)
+		return false;
+	auto text = input.substr(first, last - first + 1);
+	if (text.empty() || !std::all_of(text.begin(), text.end(), iswdigit))
+		return false;
+	wchar_t *end = nullptr;
+	auto parsed = std::wcstoul(text.c_str(), &end, 10);
+	if (!end || *end || parsed < minimum || parsed > maximum)
+		return false;
+	value = static_cast<unsigned>(parsed);
+	return true;
+}
+
 std::string colorValue(unsigned value)
 {
 	char buffer[24];
@@ -173,15 +207,42 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 	});
 	this->_addOption({
 		"Max Chat Messages",
-		{{"25", 25}, {"50", 50}, {"100", 100}, {"200", 200}},
-		[] { return maxChatMessages; },
-		[](unsigned value) {
-			if (!saveUnsigned(L"MaxChatMessages", value))
-				return false;
-			maxChatMessages = value;
-			return true;
-		},
-		decimalValue
+		{{std::to_string(maxChatMessages), 0}},
+		[] { return 0u; },
+		[](unsigned) { return true; },
+		{},
+		[this] {
+			setWideInputBoxCallbacks([this](const std::wstring &input) {
+				unsigned value;
+				if (!parseUnsignedInput(input, 1, 10000, value)) {
+					this->_showStatus("Enter a number from 1 to 10000.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
+					playSound(0x29);
+					return;
+				}
+				if (!saveUnsigned(L"MaxChatMessages", value)) {
+					this->_showSaveError();
+					return;
+				}
+				maxChatMessages = value;
+				auto &option = *std::find_if(this->_options.begin(), this->_options.end(), [](const Option &item) { return item.name == "Max Chat Messages"; });
+				option.choices[0].label = std::to_string(value);
+				this->_refreshValue(option);
+				playSound(0x28);
+			});
+			openWideInputDialog(L"Max Chat Messages (1-10000) - Enter: Save / ESC: Cancel", std::to_wstring(maxChatMessages), 5);
+		}
+	});
+	this->_addOption({
+		"Chat Key",
+		{{keyName(chatKey), 0}},
+		[] { return 0u; },
+		[](unsigned) { return true; },
+		{},
+		[this] {
+			this->_capturingChatKey = true;
+			this->_chatKeyCaptureArmed = false;
+			this->_showStatus("Release the current key, then press a new chat key. ESC cancels.", SokuLib::Color{0xFF, 0xE0, 0x90, 0xFF});
+		}
 	});
 	this->_addOption({
 		"Opponent Chat Color",
@@ -196,71 +257,6 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 			return true;
 		},
 		colorValue
-	});
-	this->_addOption({
-		"Accept Relay",
-		{{"Off", 0}, {"On", 1}},
-		[] { return (hostPref & Lobbies::HOSTPREF_ACCEPT_RELAY) != 0; },
-		[this](unsigned value) {
-			if (!saveUnsigned(L"AcceptRelay", value != 0))
-				return false;
-			if (value)
-				hostPref |= Lobbies::HOSTPREF_ACCEPT_RELAY;
-			else
-				hostPref &= ~static_cast<unsigned>(Lobbies::HOSTPREF_ACCEPT_RELAY);
-			this->_parent->onHostPrefChanged();
-			return true;
-		}
-	});
-	this->_addOption({
-		"Accept Hostlist",
-		{{"Off", 0}, {"On", 1}},
-		[] { return (hostPref & Lobbies::HOSTPREF_ACCEPT_HOSTLIST) != 0; },
-		[this](unsigned value) {
-			if (!saveUnsigned(L"AcceptHostlist", value != 0))
-				return false;
-			if (value)
-				hostPref |= Lobbies::HOSTPREF_ACCEPT_HOSTLIST;
-			else
-				hostPref &= ~static_cast<unsigned>(Lobbies::HOSTPREF_ACCEPT_HOSTLIST);
-			this->_parent->onHostPrefChanged();
-			return true;
-		}
-	});
-	this->_addOption({
-		"Main Server",
-		{{lobbyHostLabel(servHost), 0}},
-		[] { return 0u; },
-		[](unsigned) { return true; },
-		{},
-		[this] {
-			std::wstring current;
-			for (const unsigned char *ptr = reinterpret_cast<const unsigned char *>(servHost); *ptr; ptr++)
-				current.push_back(static_cast<wchar_t>(*ptr));
-			setWideInputBoxCallbacks([this](const std::wstring &value) {
-				std::string host;
-				if (!parseLobbyHost(value, host)) {
-					this->_showStatus("Invalid server address. Enter a hostname or IP only.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
-					playSound(0x29);
-					return;
-				}
-				std::wstring stored(host.begin(), host.end());
-				if (!IniConfig::writeLobbyString(profilePath, L"Host", stored)) {
-					this->_showSaveError();
-					return;
-				}
-				auto found = std::find_if(this->_options.begin(), this->_options.end(), [](const Option &option) {
-					return option.name == "Main Server";
-				});
-				if (found != this->_options.end()) {
-					found->choices[0].label = lobbyHostLabel(host);
-					this->_refreshValue(*found);
-				}
-				this->_showStatus("Saved. Reopen the game or lobby to use the new server.", SokuLib::Color{0x90, 0xE0, 0xA0, 0xFF});
-				playSound(0x28);
-			});
-			openWideInputDialog(L"Main Server - type or Ctrl+V / Enter: Save / ESC: Cancel", current, sizeof(servHost) - 1);
-		}
 	});
 	this->_addOption({
 		"Host IP",
@@ -314,6 +310,30 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 				this->_showStatus("Could not open the chat log folder.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
 				playSound(0x29);
 			}
+		}
+	});
+	this->_addOption({
+		"Reset Config",
+		{{"Restore Defaults", 0}},
+		[] { return 0u; },
+		[](unsigned) { return true; },
+		{},
+		[this] {
+			if (MessageBoxW(SokuLib::window, L"Replace SokuLobbies.ini with SokuLobbies-default.ini?\n\nThe game must be restarted afterwards.", L"Reset Lobby Configuration", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+				return;
+			auto source = std::filesystem::path(profileFolderPath) / L"SokuLobbies-default.ini";
+			if (!std::filesystem::exists(source)) {
+				this->_showStatus("SokuLobbies-default.ini was not found.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
+				playSound(0x29);
+				return;
+			}
+			if (!CopyFileW(source.c_str(), profilePath, FALSE)) {
+				this->_showStatus("Could not restore the default configuration.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
+				playSound(0x29);
+				return;
+			}
+			this->_showStatus("Defaults restored. Restart the game to apply them.", SokuLib::Color{0x90, 0xE0, 0xA0, 0xFF});
+			playSound(0x28);
 		}
 	});
 	this->_addOption({
@@ -382,6 +402,42 @@ void OptionsMenu::_showStatus(const char *message, const SokuLib::Color &color)
 	this->_status.rect.height = size.y;
 	this->_status.tint = color;
 	this->_statusTimer = 300;
+}
+
+void OptionsMenu::_updateChatKeyCapture()
+{
+	bool anyKeyDown = false;
+	for (unsigned key = VK_BACK; key <= 0xFE; key++)
+		if (GetAsyncKeyState(static_cast<int>(key)) & 0x8000) {
+			anyKeyDown = true;
+			if (!this->_chatKeyCaptureArmed)
+				continue;
+			if (key == VK_ESCAPE) {
+				this->_capturingChatKey = false;
+				this->_showStatus("Chat key change cancelled.", SokuLib::Color{0xD0, 0xD0, 0xD0, 0xFF});
+				playSound(0x29);
+				return;
+			}
+			if (!saveUnsigned(L"ChatKey", key)) {
+				this->_capturingChatKey = false;
+				this->_showSaveError();
+				return;
+			}
+			chatKey = key;
+			auto found = std::find_if(this->_options.begin(), this->_options.end(), [](const Option &option) { return option.name == "Chat Key"; });
+			if (found != this->_options.end()) {
+				found->choices[0].label = keyName(key);
+				this->_refreshValue(*found);
+			}
+			this->_capturingChatKey = false;
+			this->_showStatus("Chat key updated.", SokuLib::Color{0x90, 0xE0, 0xA0, 0xFF});
+			playSound(0x28);
+			return;
+		}
+	if (!this->_chatKeyCaptureArmed && !anyKeyDown) {
+		this->_chatKeyCaptureArmed = true;
+		this->_showStatus("Press the new chat key. ESC cancels.", SokuLib::Color{0xFF, 0xE0, 0x90, 0xFF});
+	}
 }
 
 void OptionsMenu::_initMessageEditor()
@@ -510,6 +566,10 @@ int OptionsMenu::onProcess()
 {
 	if (this->_statusTimer)
 		this->_statusTimer--;
+	if (this->_capturingChatKey) {
+		this->_updateChatKeyCapture();
+		return true;
+	}
 	inputBoxUpdate();
 	if (inputBoxShown) {
 		if (SokuLib::inputMgrs.input.b == 1) {
