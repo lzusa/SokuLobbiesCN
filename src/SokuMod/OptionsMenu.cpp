@@ -1,5 +1,6 @@
 #include "OptionsMenu.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -399,6 +400,23 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 			this->_statusTimer = 0;
 			playSound(0x28);
 		}
+	});
+	// Keep the menu layout predictable while grouping related controls.
+	std::stable_sort(this->_options.begin(), this->_options.end(), [](const Option &left, const Option &right) {
+		auto rank = [](const std::string &name) {
+			if (name == "Chat Popup Mode") return 0;
+			if (name == "Text Bubbles") return 1;
+			if (name == "Quick Messages") return 2;
+			if (name == "Opponent Chat Color") return 3;
+			if (name == "Chat Key") return 4;
+			if (name == "Host IP") return 5;
+			if (name == "Language") return 6;
+			if (name == "Max Chat Messages") return 7;
+			if (name == "Chat Logs") return 8;
+			if (name == "Reset Config") return 9;
+			return 100;
+		};
+		return rank(left.name) < rank(right.name);
 	});
 	this->_initMessageEditor();
 	this->_refreshLanguage();
