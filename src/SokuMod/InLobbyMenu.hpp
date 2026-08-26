@@ -110,6 +110,7 @@ private:
 	LobbyMenu *_menu;
 	ArcadeMachine *_currentMachine = nullptr;
 	std::chrono::steady_clock::time_point _nextArcadeActionAt{};
+	std::chrono::steady_clock::time_point _nextTeleportAt{};
 	ElevatorMachine *_currentElevator = nullptr;
 	SokuLib::Vector2u _camera;
 	float _zoom = 1;
@@ -278,10 +279,12 @@ private:
 	void _copySelectionToClipboard();
 	void _pasteFromClipboard();
 	void _completePrivateMessageRecipient();
+	bool _getPlayerCompletionTarget(size_t &targetStart, size_t &targetEnd, bool &appendSpace) const;
 	void _refreshPrivateMessageCompletions();
 	void _applyPrivateMessageCompletion();
 	void _renderPrivateMessageCompletions();
 	void _updateTextCursor(int pos);
+	bool _handleLocalTeleport(const std::wstring &msg);
 	void _sendMessage(const std::wstring &msg);
 	void _unhook();
 	void _renderMachineOverlay();

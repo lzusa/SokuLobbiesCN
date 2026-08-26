@@ -3039,8 +3039,115 @@ void InLobbyMenu::_updateTextCursor(int pos)
 		ImmSetCandidateWindow(this->immCtx, &candidate);
 }
 
+bool InLobbyMenu::_handleLocalTeleport(const std::wstring &msg)
+{
+	if (msg.size() < 3 || _wcsnicmp(msg.c_str(), L"/tp", 3) != 0 || (msg.size() != 3 && !iswspace(msg[3])))
+		return false;
+
+	auto showError = [this](const std::string &message) {
+		this->_addMessageToList(0xFF0000, 0, message);
+	};
+	if (this->_currentMachine || SokuLib::sceneId != SokuLib::SCENE_TITLE) {
+		showError("Leave the battle or spectator machine before using /tp.");
+		return true;
+	}
+	if (this->_currentElevator) {
+		showError("You cannot use /tp while inside an elevator.");
+		return true;
+	}
+	std::wstring argument = msg.substr(3);
+	while (!argument.empty() && iswspace(argument.front()))
+		argument.erase(argument.begin());
+	while (!argument.empty() && iswspace(argument.back()))
+		argument.pop_back();
+	if (argument.empty()) {
+		showError("Usage: /tp <player>");
+		return true;
+	}
+
+	const Player *target = nullptr;
+	if (argument.front() == L'@') {
+		try {
+			auto name = convertEncoding<wchar_t, char, UTF16Decode, UTF8Encode>(argument.substr(1));
+			for (const auto &[id, player] : this->_playersById)
+				if (player && player->name == name) {
+					target = player;
+					break;
+				}
+		} catch (...) {
+			showError("Invalid player name.");
+			return true;
+		}
+	} else {
+		try {
+			size_t parsed = 0;
+			auto id = std::stoul(argument, &parsed);
+			if (parsed != argument.size() || id > UINT32_MAX)
+				throw std::invalid_argument("invalid player id");
+			auto found = this->_playersById.find(static_cast<uint32_t>(id));
+			if (found != this->_playersById.end())
+				target = found->second;
+		} catch (...) {
+			showError("Player must be an id or an exact @name.");
+			return true;
+		}
+	}
+	if (!target) {
+		showError("Cannot find that player.");
+		return true;
+	}
+	auto me = this->_connection->getMe();
+	if (!me) {
+		showError("Your lobby player is not ready.");
+		return true;
+	}
+	if (target->id == me->id) {
+		showError("You are already at your own position.");
+		return true;
+	}
+
+	auto now = std::chrono::steady_clock::now();
+	if (now < this->_nextTeleportAt) {
+		auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(this->_nextTeleportAt - now);
+		auto seconds = (remaining.count() + 999) / 1000;
+		showError("You can use /tp again in " + std::to_string(seconds) + " seconds.");
+		return true;
+	}
+
+	auto &background = lobbyData->backgrounds[this->_background];
+	unsigned targetPlatform = static_cast<unsigned>(background.platforms.size());
+	for (unsigned i = 0; i < background.platforms.size(); i++) {
+		const auto &platform = background.platforms[i];
+		if (
+			target->pos.y == static_cast<uint32_t>(platform.pos.y) &&
+			target->pos.x >= static_cast<uint32_t>(platform.pos.x) &&
+			target->pos.x <= static_cast<uint32_t>(platform.pos.x + platform.width)
+		) {
+			targetPlatform = i;
+			break;
+		}
+	}
+	if (targetPlatform == background.platforms.size()) {
+		showError("That player is not on a reachable platform.");
+		return true;
+	}
+
+	this->_currentPlatform = targetPlatform;
+	me->pos = target->pos;
+	me->dir &= 0b10000;
+	Lobbies::PacketMove move{0, me->dir};
+	Lobbies::PacketPosition position{0, me->pos.x, me->pos.y, me->dir, me->battleStatus};
+	this->_connection->send(&move, sizeof(move));
+	this->_connection->send(&position, sizeof(position));
+	this->_nextTeleportAt = now + std::chrono::minutes(1);
+	this->_addMessageToList(0x00FFFF, 0, "Teleported to " + target->name + ".");
+	return true;
+}
+
 void InLobbyMenu::_sendMessage(const std::wstring &msg)
 {
+	if (this->_handleLocalTeleport(msg))
+		return;
 	std::string encoded;
 	std::wstring token;
 	std::wstring currentEmote;
@@ -3573,22 +3680,17 @@ void InLobbyMenu::_setEscapeSource(bool &source, uint64_t &generation, bool down
 void InLobbyMenu::_completePrivateMessageRecipient()
 {
 	std::lock_guard<std::mutex> textLock(this->_textMutex);
-	if (this->_buffer.size() <= 5) {
-		playSound(0x29);
-		return;
-	}
-	std::wstring text(this->_buffer.begin(), this->_buffer.end() - 1);
-	if (text.compare(0, 5, L"/msg ") != 0 || this->_textCursorPosIndex < 5) {
+	size_t targetStart;
+	size_t targetEnd;
+	bool appendSpace;
+	if (!this->_getPlayerCompletionTarget(targetStart, targetEnd, appendSpace)) {
 		this->_privateMessageCompletions.clear();
 		this->_privateMessageCompletionTimer = 0;
 		playSound(0x29);
 		return;
 	}
-	auto targetEnd = text.find(L' ', 5);
-	if (targetEnd == std::wstring::npos)
-		targetEnd = text.size();
 	bool cycleExisting = !this->_privateMessageCompletions.empty() &&
-		this->_textCursorPosIndex <= static_cast<int>(targetEnd + (targetEnd < text.size()));
+		this->_textCursorPosIndex <= static_cast<int>(targetEnd + (appendSpace && targetEnd < this->_buffer.size() - 1));
 	if (!cycleExisting)
 		this->_refreshPrivateMessageCompletions();
 	else
@@ -3607,23 +3709,46 @@ void InLobbyMenu::_completePrivateMessageRecipient()
 	playSound(0x27);
 }
 
+bool InLobbyMenu::_getPlayerCompletionTarget(size_t &targetStart, size_t &targetEnd, bool &appendSpace) const
+{
+	if (this->_buffer.empty())
+		return false;
+	std::wstring text(this->_buffer.begin(), this->_buffer.end() - 1);
+	struct CommandPrefix {
+		const wchar_t *text;
+		bool appendSpace;
+	};
+	static constexpr CommandPrefix prefixes[] = {
+		{L"/msg ", true},
+		{L"/join ", false},
+		{L"/locate ", false},
+		{L"/tp ", false},
+	};
+	for (const auto &prefix : prefixes) {
+		targetStart = wcslen(prefix.text);
+		if (text.compare(0, targetStart, prefix.text) != 0)
+			continue;
+		targetEnd = text.find(L' ', targetStart);
+		if (targetEnd == std::wstring::npos)
+			targetEnd = text.size();
+		appendSpace = prefix.appendSpace;
+		return this->_textCursorPosIndex >= static_cast<int>(targetStart);
+	}
+	return false;
+}
+
 void InLobbyMenu::_refreshPrivateMessageCompletions()
 {
+	size_t targetStart;
+	size_t targetEnd;
+	bool appendSpace;
+	if (!this->_getPlayerCompletionTarget(targetStart, targetEnd, appendSpace) || this->_textCursorPosIndex > static_cast<int>(targetEnd)) {
+		this->_privateMessageCompletions.clear();
+		this->_privateMessageCompletionTimer = 0;
+		return;
+	}
 	std::wstring text(this->_buffer.begin(), this->_buffer.end() - 1);
-	if (text.compare(0, 5, L"/msg ") != 0 || this->_textCursorPosIndex < 5) {
-		this->_privateMessageCompletions.clear();
-		this->_privateMessageCompletionTimer = 0;
-		return;
-	}
-	auto targetEnd = text.find(L' ', 5);
-	if (targetEnd == std::wstring::npos)
-		targetEnd = text.size();
-	if (this->_textCursorPosIndex > static_cast<int>(targetEnd)) {
-		this->_privateMessageCompletions.clear();
-		this->_privateMessageCompletionTimer = 0;
-		return;
-	}
-	std::wstring query = text.substr(5, targetEnd - 5);
+	std::wstring query = text.substr(targetStart, targetEnd - targetStart);
 	if (!query.empty() && query.front() == L'@')
 		query.erase(query.begin());
 	std::transform(query.begin(), query.end(), query.begin(), towlower);
@@ -3685,17 +3810,18 @@ void InLobbyMenu::_applyPrivateMessageCompletion()
 {
 	if (this->_privateMessageCompletions.empty())
 		return;
-	std::wstring text(this->_buffer.begin(), this->_buffer.end() - 1);
-	auto targetEnd = text.find(L' ', 5);
-	if (targetEnd == std::wstring::npos)
-		targetEnd = text.size();
+	size_t targetStart;
+	size_t targetEnd;
+	bool appendSpace;
+	if (!this->_getPlayerCompletionTarget(targetStart, targetEnd, appendSpace))
+		return;
 	auto idText = std::to_wstring(this->_privateMessageCompletions[this->_privateMessageCompletionIndex].playerId);
-	this->_buffer.erase(this->_buffer.begin() + 5, this->_buffer.begin() + targetEnd);
-	this->_buffer.insert(this->_buffer.begin() + 5, idText.begin(), idText.end());
-	auto newEnd = 5 + idText.size();
-	if (newEnd >= this->_buffer.size() - 1 || this->_buffer[newEnd] != L' ')
+	this->_buffer.erase(this->_buffer.begin() + targetStart, this->_buffer.begin() + targetEnd);
+	this->_buffer.insert(this->_buffer.begin() + targetStart, idText.begin(), idText.end());
+	auto newEnd = targetStart + idText.size();
+	if (appendSpace && (newEnd >= this->_buffer.size() - 1 || this->_buffer[newEnd] != L' '))
 		this->_buffer.insert(this->_buffer.begin() + newEnd, L' ');
-	this->_updateTextCursor(static_cast<int>(newEnd + 1));
+	this->_updateTextCursor(static_cast<int>(newEnd + appendSpace));
 	this->_clearSelection();
 	this->textChanged |= 1;
 	this->_updateCompositionSprite();
