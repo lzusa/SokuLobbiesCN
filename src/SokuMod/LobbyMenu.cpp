@@ -17,6 +17,7 @@
 #include "data.hpp"
 #include "StatsMenu.hpp"
 #include "AchievementsMenu.hpp"
+#include "OptionsMenu.hpp"
 #include "integration.hpp"
 #include "createUTFTexture.hpp"
 #include "ipv6map_extern.hpp"
@@ -377,8 +378,10 @@ bool LobbyMenu::_normalMenuUpdate()
 			MessageBox(SokuLib::window, "Creating lobbies in game is not yet supported.\nUse the RunServer.bat helper provided with the mod to create a lobby.", "Partially implemented", MB_ICONINFORMATION);
 			break;
 		case MENUITEM_CUSTOMIZE_LOBBY:
-		case MENUITEM_OPTIONS:
 			MessageBox(SokuLib::window, "Not implemented", "Not implemented", MB_ICONINFORMATION);
+			break;
+		case MENUITEM_OPTIONS:
+			SokuLib::activateMenu(new OptionsMenu(this));
 			break;
 		case MENUITEM_ACHIVEMENTS:
 			SokuLib::activateMenu(new AchievementsMenu());
@@ -754,6 +757,11 @@ void LobbyMenu::_customizeAvatarRender()
 void LobbyMenu::setActive()
 {
 	this->_active = true;
+}
+
+void LobbyMenu::onHostPrefChanged()
+{
+	this->_loadedSettings.settings.hostPref = static_cast<Lobbies::HostPreference>(hostPref);
 }
 
 void LobbyMenu::_masterServerLoop()

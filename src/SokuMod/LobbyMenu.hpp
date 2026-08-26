@@ -100,6 +100,7 @@ public:
 	int onRender() override;
 	void setActive();
 	void _refreshName();
+	void onHostPrefChanged();
 };
 
 #endif //SOKULOBBIES_LOBBYMENU_HPP

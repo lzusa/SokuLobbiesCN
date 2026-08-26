@@ -152,6 +152,8 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
 		src/SokuMod/Connection.hpp
 		src/SokuMod/InputBox.cpp
 		src/SokuMod/InputBox.cpp
+		src/SokuMod/IniConfig.cpp
+		src/SokuMod/IniConfig.hpp
 		src/SokuMod/InLobbyMenu.cpp
 		src/SokuMod/InLobbyMenu.cpp
 		src/SokuMod/getPublicIp.hpp
@@ -167,6 +169,8 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
 		src/SokuMod/AchievementsMenu.hpp
 		src/SokuMod/StatsMenu.cpp
 		src/SokuMod/StatsMenu.hpp
+		src/SokuMod/OptionsMenu.cpp
+		src/SokuMod/OptionsMenu.hpp
 		src/SokuMod/LobbyData.cpp
 		src/SokuMod/LobbyData.hpp
 		src/SokuMod/SmallHostlist.cpp
@@ -197,6 +201,17 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
 	target_link_directories(SokuLobbiesMod PRIVATE lib)
 	target_include_directories(SokuLobbiesMod PRIVATE lib/include)
 	target_compile_definitions(SokuLobbiesMod PRIVATE _LOBBYNOLOG=1)
+
+	option(SOKULOBBIES_BUILD_TESTS "Build SokuLobbies unit tests" OFF)
+	if (SOKULOBBIES_BUILD_TESTS)
+		enable_testing()
+		add_executable(SokuLobbiesIniConfigTests
+			tests/IniConfigTests.cpp
+			src/SokuMod/IniConfig.cpp
+			src/SokuMod/IniConfig.hpp
+		)
+		add_test(NAME SokuLobbiesIniConfigTests COMMAND SokuLobbiesIniConfigTests)
+	endif()
 endif()
 
 
