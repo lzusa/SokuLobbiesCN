@@ -190,6 +190,7 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
 		SokuLobbiesMod
 		SokuLib
 		shlwapi
+		shell32
 		ws2_32
 		d3dx9
 		imm32

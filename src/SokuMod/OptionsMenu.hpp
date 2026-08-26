@@ -45,6 +45,7 @@ private:
 	void _refreshValue(Option &option);
 	void _applyValue(Option &option, int delta);
 	void _showSaveError();
+	void _showStatus(const char *message, const SokuLib::Color &color);
 	void _initMessageEditor();
 	void _refreshMessageValue(unsigned index);
 	void _openMessageEditor(unsigned index);

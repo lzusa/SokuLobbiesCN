@@ -2,6 +2,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <shellapi.h>
 #include <../directx/dinput.h>
 #include "IniConfig.hpp"
 #include "InputBox.hpp"
@@ -24,6 +26,67 @@ std::string colorValue(unsigned value)
 	char buffer[24];
 	std::snprintf(buffer, sizeof(buffer), "Custom (#%06X)", value & 0xFFFFFF);
 	return buffer;
+}
+
+std::string lobbyHostLabel(const std::string &host)
+{
+	if (host.size() <= 28)
+		return host;
+	return host.substr(0, 25) + "...";
+}
+
+std::wstring readLobbyString(const wchar_t *key)
+{
+	wchar_t buffer[256];
+	GetPrivateProfileStringW(L"Lobby", key, L"", buffer, sizeof(buffer) / sizeof(*buffer), profilePath);
+	return buffer;
+}
+
+std::string hostIpLabel(const std::wstring &value)
+{
+	if (value.empty())
+		return "Auto";
+	std::string label;
+	label.reserve(value.size());
+	for (wchar_t chr : value)
+		label.push_back(static_cast<char>(chr));
+	return lobbyHostLabel(label);
+}
+
+bool parseHostIp(const std::wstring &input, std::wstring &host)
+{
+	auto first = input.find_first_not_of(L" \t");
+	if (first == std::wstring::npos) {
+		host.clear();
+		return true;
+	}
+	auto last = input.find_last_not_of(L" \t");
+	host = input.substr(first, last - first + 1);
+	if (host.size() >= 256)
+		return false;
+	for (wchar_t chr : host)
+		if (chr < 0x21 || chr > 0x7E || chr == L'/' || chr == L'\\' || chr == L'[' || chr == L']')
+			return false;
+	return true;
+}
+
+bool parseLobbyHost(const std::wstring &input, std::string &host)
+{
+	auto first = input.find_first_not_of(L" \t");
+	auto last = input.find_last_not_of(L" \t");
+	if (first == std::wstring::npos)
+		return false;
+	auto value = input.substr(first, last - first + 1);
+	if (value.empty() || value.size() >= sizeof(servHost))
+		return false;
+	host.clear();
+	host.reserve(value.size());
+	for (wchar_t chr : value) {
+		if (chr < 0x21 || chr > 0x7E || chr == L'/' || chr == L'\\' || chr == L'[' || chr == L']')
+			return false;
+		host.push_back(static_cast<char>(chr));
+	}
+	return true;
 }
 
 bool saveUnsigned(const wchar_t *key, unsigned value)
@@ -135,18 +198,6 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 		colorValue
 	});
 	this->_addOption({
-		"Host Preference",
-		{{"Client Only", Lobbies::HOSTPREF_CLIENT_ONLY}, {"Host Only", Lobbies::HOSTPREF_HOST_ONLY}, {"No Preference", Lobbies::HOSTPREF_NO_PREF}},
-		[] { return hostPref & Lobbies::HOSTPREF_HOST_PREF_MASK; },
-		[this](unsigned value) {
-			if (!saveUnsigned(L"HostPref", value & Lobbies::HOSTPREF_HOST_PREF_MASK))
-				return false;
-			hostPref = (hostPref & ~static_cast<unsigned>(Lobbies::HOSTPREF_HOST_PREF_MASK)) | (value & Lobbies::HOSTPREF_HOST_PREF_MASK);
-			this->_parent->onHostPrefChanged();
-			return true;
-		}
-	});
-	this->_addOption({
 		"Accept Relay",
 		{{"Off", 0}, {"On", 1}},
 		[] { return (hostPref & Lobbies::HOSTPREF_ACCEPT_RELAY) != 0; },
@@ -174,6 +225,95 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 				hostPref &= ~static_cast<unsigned>(Lobbies::HOSTPREF_ACCEPT_HOSTLIST);
 			this->_parent->onHostPrefChanged();
 			return true;
+		}
+	});
+	this->_addOption({
+		"Main Server",
+		{{lobbyHostLabel(servHost), 0}},
+		[] { return 0u; },
+		[](unsigned) { return true; },
+		{},
+		[this] {
+			std::wstring current;
+			for (const unsigned char *ptr = reinterpret_cast<const unsigned char *>(servHost); *ptr; ptr++)
+				current.push_back(static_cast<wchar_t>(*ptr));
+			setWideInputBoxCallbacks([this](const std::wstring &value) {
+				std::string host;
+				if (!parseLobbyHost(value, host)) {
+					this->_showStatus("Invalid server address. Enter a hostname or IP only.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
+					playSound(0x29);
+					return;
+				}
+				std::wstring stored(host.begin(), host.end());
+				if (!IniConfig::writeLobbyString(profilePath, L"Host", stored)) {
+					this->_showSaveError();
+					return;
+				}
+				auto found = std::find_if(this->_options.begin(), this->_options.end(), [](const Option &option) {
+					return option.name == "Main Server";
+				});
+				if (found != this->_options.end()) {
+					found->choices[0].label = lobbyHostLabel(host);
+					this->_refreshValue(*found);
+				}
+				this->_showStatus("Saved. Reopen the game or lobby to use the new server.", SokuLib::Color{0x90, 0xE0, 0xA0, 0xFF});
+				playSound(0x28);
+			});
+			openWideInputDialog(L"Main Server - type or Ctrl+V / Enter: Save / ESC: Cancel", current, sizeof(servHost) - 1);
+		}
+	});
+	this->_addOption({
+		"Host IP",
+		{{hostIpLabel(readLobbyString(L"HostIP")), 0}},
+		[] { return 0u; },
+		[](unsigned) { return true; },
+		{},
+		[this] {
+			auto current = readLobbyString(L"HostIP");
+			setWideInputBoxCallbacks([this](const std::wstring &value) {
+				std::wstring host;
+				if (!parseHostIp(value, host)) {
+					this->_showStatus("Invalid Host IP. Use an IPv4 address with an optional port.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
+					playSound(0x29);
+					return;
+				}
+				if (!IniConfig::writeLobbyString(profilePath, L"HostIP", host)) {
+					this->_showSaveError();
+					return;
+				}
+				auto found = std::find_if(this->_options.begin(), this->_options.end(), [](const Option &option) {
+					return option.name == "Host IP";
+				});
+				if (found != this->_options.end()) {
+					found->choices[0].label = hostIpLabel(host);
+					this->_refreshValue(*found);
+				}
+				this->_showStatus(host.empty() ? "Host IP set to automatic." : "Host IP saved.", SokuLib::Color{0x90, 0xE0, 0xA0, 0xFF});
+				playSound(0x28);
+			});
+			openWideInputDialog(L"Host IP (blank = Auto) - Ctrl+V / Enter: Save / ESC: Cancel", current, 255);
+		}
+	});
+	this->_addOption({
+		"Chat Logs",
+		{{"Open Folder", 0}},
+		[] { return 0u; },
+		[](unsigned) { return true; },
+		{},
+		[this] {
+			try {
+				auto folder = std::filesystem::path(profileFolderPath) / "chatlog";
+				std::filesystem::create_directories(folder);
+				auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(SokuLib::window, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+				if (result <= 32) {
+					this->_showStatus("Could not open the chat log folder.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
+					playSound(0x29);
+				} else
+					playSound(0x28);
+			} catch (...) {
+				this->_showStatus("Could not open the chat log folder.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
+				playSound(0x29);
+			}
 		}
 	});
 	this->_addOption({
@@ -229,8 +369,19 @@ void OptionsMenu::_refreshValue(Option &option)
 
 void OptionsMenu::_showSaveError()
 {
-	this->_statusTimer = 240;
+	this->_showStatus("Could not save SokuLobbies.ini; value was not changed.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
 	playSound(0x29);
+}
+
+void OptionsMenu::_showStatus(const char *message, const SokuLib::Color &color)
+{
+	SokuLib::Vector2i size;
+	this->_status.texture.createFromText(message, lobbyData->getFont(12), {540, 20}, &size);
+	this->_status.setSize(size.to<unsigned>());
+	this->_status.rect.width = size.x;
+	this->_status.rect.height = size.y;
+	this->_status.tint = color;
+	this->_statusTimer = 300;
 }
 
 void OptionsMenu::_initMessageEditor()
@@ -378,7 +529,7 @@ int OptionsMenu::onProcess()
 	if (this->_options.empty())
 		return true;
 	auto &option = this->_options[this->_cursor];
-	if (SokuLib::inputMgrs.input.a == 1) {
+	if (SokuLib::inputMgrs.input.a == 1 || SokuLib::checkKeyOneshot(DIK_RETURN, 0, 0, 0)) {
 		if (option.confirm)
 			option.confirm();
 		else
@@ -386,8 +537,12 @@ int OptionsMenu::onProcess()
 		return true;
 	}
 	if (std::abs(SokuLib::inputMgrs.input.horizontalAxis) == 1 ||
-		(std::abs(SokuLib::inputMgrs.input.horizontalAxis) > 36 && std::abs(SokuLib::inputMgrs.input.horizontalAxis) % 6 == 0))
-		this->_applyValue(option, SokuLib::inputMgrs.input.horizontalAxis < 0 ? -1 : 1);
+		(std::abs(SokuLib::inputMgrs.input.horizontalAxis) > 36 && std::abs(SokuLib::inputMgrs.input.horizontalAxis) % 6 == 0)) {
+		if (option.confirm)
+			option.confirm();
+		else
+			this->_applyValue(option, SokuLib::inputMgrs.input.horizontalAxis < 0 ? -1 : 1);
+	}
 	if (std::abs(SokuLib::inputMgrs.input.verticalAxis) == 1 ||
 		(std::abs(SokuLib::inputMgrs.input.verticalAxis) > 36 && std::abs(SokuLib::inputMgrs.input.verticalAxis) % 6 == 0)) {
 		if (SokuLib::inputMgrs.input.verticalAxis > 0)
@@ -420,5 +575,6 @@ int OptionsMenu::onRender()
 		this->_status.draw();
 	else
 		this->_hint.draw();
+	inputBoxRender();
 	return 0;
 }

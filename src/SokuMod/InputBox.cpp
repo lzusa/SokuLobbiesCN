@@ -379,6 +379,26 @@ void inputBoxUpdate()
 LRESULT __stdcall Hooked_WndProc(const HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	if (inputBoxShown && wideMode) {
+		if (uMsg == WM_KEYDOWN &&
+			((wParam == 'V' && (GetKeyState(VK_CONTROL) & 0x8000)) || (wParam == VK_INSERT && (GetKeyState(VK_SHIFT) & 0x8000)))) {
+			if (OpenClipboard(hWnd)) {
+				HANDLE handle = GetClipboardData(CF_UNICODETEXT);
+				if (handle) {
+					const auto *clipboard = static_cast<const wchar_t *>(GlobalLock(handle));
+					if (clipboard) {
+						std::wstring pasted(clipboard);
+						for (auto &chr : pasted)
+							if (chr == L'\r' || chr == L'\n')
+								chr = L' ';
+						std::lock_guard<std::mutex> lock(mutex);
+						insertWideText(pasted);
+						GlobalUnlock(handle);
+					}
+				}
+				CloseClipboard();
+			}
+			return 0;
+		}
 		if (uMsg == WM_KEYDOWN && !wideComposition.empty()) {
 			if (wParam == VK_ESCAPE)
 				suppressWideEscape = true;
