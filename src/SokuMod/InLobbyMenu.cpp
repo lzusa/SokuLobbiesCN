@@ -1828,6 +1828,8 @@ void InLobbyMenu::_queuePlayerRemoval(unsigned player)
 
 void InLobbyMenu::_buildPlayerName(unsigned player, const std::string &name)
 {
+	constexpr int horizontalPadding = 2;
+	constexpr SokuLib::Vector2i textureSize{200, 20};
 	SokuLib::Vector2i size;
 	int texId = 0;
 	std::wstring decoded;
@@ -1837,12 +1839,19 @@ void InLobbyMenu::_buildPlayerName(unsigned player, const std::string &name)
 	} catch (...) {
 		return;
 	}
-	if (!createTextTexture(texId, decoded.c_str(), lobbyData->getFont(16), {200, 20}, &size)) {
+	auto &font = lobbyData->getFont(16);
+	auto originalOffsetX = font.description.offsetX;
+
+	font.description.offsetX = originalOffsetX + horizontalPadding;
+	auto created = createTextTexture(texId, decoded.c_str(), font, textureSize, &size);
+	font.description.offsetX = originalOffsetX;
+	if (!created) {
 		puts("Error creating player name texture");
 		return;
 	}
+	size.x = (std::min)(textureSize.x, size.x + horizontalPadding * 2);
 	auto &sprite = this->_extraPlayerData[player].name;
-	sprite.texture.setHandle(texId, {200, 20});
+	sprite.texture.setHandle(texId, textureSize.to<unsigned>());
 	sprite.setSize(size.to<unsigned>());
 	sprite.rect.width = size.x;
 	sprite.rect.height = size.y;
