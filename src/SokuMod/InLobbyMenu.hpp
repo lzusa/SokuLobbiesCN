@@ -256,7 +256,7 @@ private:
 	void _buildPlayerName(unsigned player, const std::string &name);
 	void _processPendingTextureWork();
 	void _logChatToFile(unsigned player, const std::string &msg);
-	void _inputBoxUpdate();
+	void _inputBoxUpdate(bool blockChatInput);
 	void _processHotkeyEvents();
 	EscapeOwner _classifyEscapeOwner() const;
 	void _setEscapeSource(bool &source, uint64_t &generation, bool down, bool mapped);

@@ -559,6 +559,7 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		this->_showTextBubble(player, msg, privateMessage);
 		std::optional<unsigned> colorOverride;
 		bool opponentDisconnected = false;
+		bool opponentJoined = false;
 		bool opponentMessage = false;
 		if (privateMessage)
 			colorOverride = opponentChatColor;
@@ -572,11 +573,13 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 					opponentMessage = true;
 				}
 				if (player == 0) {
+					auto joinMessage = this->_recentOpponent->playerName + " has joined the lobby.";
 					auto disconnectPrefix = this->_recentOpponent->playerName + " has disconnected";
 					auto kickedPrefix = this->_recentOpponent->playerName + " has been kicked:";
+					opponentJoined = msg == joinMessage;
 					opponentDisconnected = msg.compare(0, disconnectPrefix.size(), disconnectPrefix) == 0 ||
 						msg.compare(0, kickedPrefix.size(), kickedPrefix) == 0;
-					if (highlighted && opponentDisconnected)
+					if (highlighted && (opponentJoined || opponentDisconnected))
 						colorOverride = opponentChatColor;
 				}
 			}
@@ -2379,12 +2382,23 @@ void InLobbyMenu::onKeyReleased()
 	this->_textMutex.unlock();
 }
 
-void InLobbyMenu::_inputBoxUpdate()
+void InLobbyMenu::_inputBoxUpdate(bool blockChatInput)
 {
 	if (GetForegroundWindow() != SokuLib::window)
 		return;
 	std::lock_guard<std::mutex> lock_(this->keyTimersMutex);
 	this->_processHotkeyEvents();
+	if (blockChatInput && this->_editingText) {
+		this->_editingText = false;
+		this->_clearSelection();
+		this->_chatOffset = 0;
+		this->_privateMessageCompletions.clear();
+		this->_privateMessageCompletionTimer = 0;
+		this->immComposition.clear();
+		this->compositionCursor = 0;
+		if (this->immCtx)
+			ImmNotifyIME(this->immCtx, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+	}
 	if (this->_emotePickerOpen) {
 		this->_updateEmotePicker();
 		goto ret_reset_keysPressed;
@@ -2421,7 +2435,7 @@ void InLobbyMenu::_inputBoxUpdate()
 		playSound(0x27);
 	}
 	if (!this->_editingText) {
-		if (this->keysPressed[chatKey]) {
+		if (!blockChatInput && this->keysPressed[chatKey]) {
 			this->_editingText = true;
 			this->_initInputBox();
 			playSound(0x28);
@@ -3244,7 +3258,12 @@ void InLobbyMenu::updateChat(bool inGame)
 		this->_clearTextBubbles();
 		this->_textBubblesOutsideLobby = outsideLobby;
 	}
-	this->_inputBoxUpdate();
+	const bool blockChatInput =
+		SokuLib::sceneId == SokuLib::SCENE_BATTLECL ||
+		SokuLib::sceneId == SokuLib::SCENE_BATTLESV ||
+		SokuLib::newSceneId == SokuLib::SCENE_BATTLECL ||
+		SokuLib::newSceneId == SokuLib::SCENE_BATTLESV;
+	this->_inputBoxUpdate(blockChatInput);
 	if (this->_chatPopupModeTimer)
 		this->_chatPopupModeTimer--;
 	if (this->_editingText)

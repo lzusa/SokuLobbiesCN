@@ -162,17 +162,29 @@ std::wstring localizedChoice(const std::string &label)
 	return found == labels.end() ? std::wstring(label.begin(), label.end()) : found->second;
 }
 
+bool shouldUseSharpText(const std::wstring &text)
+{
+	return std::all_of(text.begin(), text.end(), [](wchar_t chr) {
+		return chr < 0x80;
+	});
+}
+
 void createLocalizedSprite(SokuLib::DrawUtils::Sprite &sprite, const std::wstring &text, unsigned fontSize, SokuLib::Vector2i bounds)
 {
 	SokuLib::Vector2i size;
 	int textureId = 0;
 	auto &font = lobbyData->getFont(fontSize);
 	const auto originalOffsetX = font.description.offsetX;
+	const auto originalShadow = font.description.shadow;
 	const unsigned leftPadding = chineseLanguage ? 0 : 2;
+	const bool sharp = shouldUseSharpText(text);
 
 	font.description.offsetX = originalOffsetX + leftPadding;
-	auto created = createTextTexture(textureId, text.c_str(), font, bounds, &size, true);
+	if (!sharp)
+		font.description.shadow = 0;
+	auto created = createTextTexture(textureId, text.c_str(), font, bounds, &size, sharp);
 	font.description.offsetX = originalOffsetX;
+	font.description.shadow = originalShadow;
 	if (!created)
 		return;
 	size.x = (std::min)(bounds.x, size.x + static_cast<int>(leftPadding));
@@ -561,7 +573,15 @@ void OptionsMenu::_refreshMessageValue(unsigned index)
 	}
 	SokuLib::Vector2i size;
 	int textureId = 0;
-	if (!createTextTexture(textureId, value.c_str(), lobbyData->getFont(16), {450, 24}, &size, true))
+	auto &font = lobbyData->getFont(16);
+	const auto originalShadow = font.description.shadow;
+	const bool sharp = shouldUseSharpText(value);
+
+	if (!sharp)
+		font.description.shadow = 0;
+	auto created = createTextTexture(textureId, value.c_str(), font, {450, 24}, &size, sharp);
+	font.description.shadow = originalShadow;
+	if (!created)
 		return;
 	auto &sprite = this->_messageValues[index];
 	sprite.texture.setHandle(textureId, {450, 24});
