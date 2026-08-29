@@ -3167,8 +3167,46 @@ bool InLobbyMenu::_handleLocalTeleport(const std::wstring &msg)
 	return true;
 }
 
+bool InLobbyMenu::_handleLocalHelp(const std::wstring &msg)
+{
+	std::wstring command = msg;
+	while (!command.empty() && iswspace(command.front()))
+		command.erase(command.begin());
+	while (!command.empty() && iswspace(command.back()))
+		command.pop_back();
+	if (_wcsicmp(command.c_str(), L"/help") == 0) {
+		this->_addMessageToList(
+			0xFFFF00,
+			0,
+			"Client command:\n/tp <player>\nPlayer completion: use Tab or Up/Down after /msg, /join, /locate, or /tp."
+		);
+		return false;
+	}
+	if (command.size() < 6 || _wcsnicmp(command.c_str(), L"/help", 5) != 0 || !iswspace(command[5]))
+		return false;
+
+	auto argument = command.substr(6);
+	while (!argument.empty() && iswspace(argument.front()))
+		argument.erase(argument.begin());
+	while (!argument.empty() && iswspace(argument.back()))
+		argument.pop_back();
+	if (!argument.empty() && argument.front() == L'/')
+		argument.erase(argument.begin());
+	if (_wcsicmp(argument.c_str(), L"tp") != 0)
+		return false;
+
+	this->_addMessageToList(
+		0xFFFF00,
+		0,
+		"/tp <player>: Teleport to a player by id or exact @name. Has a 60-second cooldown and cannot be used at a battle machine, spectator machine, or inside an elevator.\nExample:\n/tp 1\n/tp @PinkySmile"
+	);
+	return true;
+}
+
 void InLobbyMenu::_sendMessage(const std::wstring &msg)
 {
+	if (this->_handleLocalHelp(msg))
+		return;
 	if (this->_handleLocalTeleport(msg))
 		return;
 	std::string encoded;

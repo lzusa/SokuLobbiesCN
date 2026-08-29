@@ -820,17 +820,17 @@ Connection *Server::_findPlayer(const std::string &name)
 }
 
 const std::map<std::string, Server::Cmd> Server::_commands{
-	{"help",    {"[command]", "Displays list of commands.\nExample:\n/help\n/help help", &Server::_helpCmd}},
-	{"join",    {"<player_name>", "Join an arcade machine. The id must be in the range 0 to 4294967295\nExample:\n/join 1\n/join @PinkySmile", &Server::_joinCmd}},
-	{"list",    {"", "Displays the list of connected players.", &Server::_listCmd}},
-	{"locate",  {"<player_name>", "Locate a player in the field.\nExample:\n/locate 1\n/locate @PinkySmile", &Server::_locateCmd}},
-	{"msg",     {"<player_name> <message>", "Sends a message privately\nExample:\n/msg @PinkySmile Hello!", &Server::_msgCmd}},
+	{"help",    {"[command]", "Displays all commands or detailed help for one command.\nExample:\n/help\n/help join", &Server::_helpCmd}},
+	{"join",    {"<player>", "Joins the arcade machine used by a player. Use a player id or exact @name. Updated clients support Tab and Up/Down player completion.\nExample:\n/join 1\n/join @PinkySmile", &Server::_joinCmd}},
+	{"list",    {"", "Displays the ids and names of all connected players.\nExample:\n/list", &Server::_listCmd}},
+	{"locate",  {"<player>", "Displays a player's current lobby coordinates. Use a player id or exact @name. Updated clients support Tab and Up/Down player completion.\nExample:\n/locate 1\n/locate @PinkySmile", &Server::_locateCmd}},
+	{"msg",     {"<player> <message>", "Sends a private message. Use a player id or exact @name. Updated clients support fuzzy name search with Tab and Up/Down completion.\nExample:\n/msg 1 Hello!\n/msg @PinkySmile Hello!", &Server::_msgCmd}},
 };
 
 const std::map<std::string, Server::Cmd> Server::_adminCommands{
-	{"ban",    {"<player_name> <reason>", "Bans a player.\nExample:\n/ban @PinkySmile\n/ban 1", &Server::_banCmd}},
-	{"banip",  {"<ip> <reason>", "Bans a player.\nExample:\n/ban @PinkySmile\n/ban 1", &Server::_banipCmd}},
-	{"kick",   {"<player_name> <reason>", "Kicks a player.\nExample:\n/ban @PinkySmile\n/ban 1", &Server::_kickCmd}},
+	{"ban",    {"<player> <reason>", "Bans a player by id or exact @name.\nExample:\n/ban @PinkySmile Repeated abuse\n/ban 1 Repeated abuse", &Server::_banCmd}},
+	{"banip",  {"<ip> <reason>", "Bans an IP address.\nExample:\n/banip 192.0.2.1 Repeated abuse", &Server::_banipCmd}},
+	{"kick",   {"<player> <reason>", "Kicks a player by id or exact @name.\nExample:\n/kick @PinkySmile Please reconnect\n/kick 1 Please reconnect", &Server::_kickCmd}},
 	{"say",    {"<message>", "Sends a message as the server.\nExample:\n/say Hello!", &Server::_sayCmd}},
 	{"warn",   {"<message>", "Sends an important message to everyone.\nExample:\n/warn The server will close in 5 minutes.", &Server::_warnCmd}},
 };

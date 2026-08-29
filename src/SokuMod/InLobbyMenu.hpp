@@ -285,6 +285,7 @@ private:
 	void _renderPrivateMessageCompletions();
 	void _updateTextCursor(int pos);
 	bool _handleLocalTeleport(const std::wstring &msg);
+	bool _handleLocalHelp(const std::wstring &msg);
 	void _sendMessage(const std::wstring &msg);
 	void _unhook();
 	void _renderMachineOverlay();
