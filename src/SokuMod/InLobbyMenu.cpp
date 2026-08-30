@@ -841,7 +841,8 @@ int InLobbyMenu::onProcess()
 		// After all, we are not technically inside the connect menu.
 		reinterpret_cast<void (__thiscall *)(SokuLib::MenuConnect *)>(0x449160)(this->_parent);
 		SokuLib::inputMgrs.input = inputs;
-		if (this->_hostlist && !this->_hostlist->update()) {
+		if (this->_hostlist && (this->_hostlistExitRequested || !this->_hostlist->update())) {
+			this->_hostlistExitRequested = false;
 			SokuLib::playBGM(this->_music.c_str());
 			this->_hostlist->requestStop();
 			this->_retiredHostlists.emplace_back(std::move(this->_hostlist));
@@ -2685,6 +2686,8 @@ void InLobbyMenu::_processHotkeyEvents()
 			this->_consumeEscape(event);
 			playSound(0x29);
 		} else if (event.escapeOwner == EscapeOwner::MOD_UI) {
+			if (this->_hostlist)
+				this->_hostlistExitRequested = true;
 			this->_consumeEscape(event);
 		} else if (event.escapeOwner == EscapeOwner::LOBBY) {
 			this->_consumeEscape(event);
@@ -3926,7 +3929,7 @@ void InLobbyMenu::_renderPrivateMessageCompletions()
 
 InLobbyMenu::EscapeOwner InLobbyMenu::_classifyEscapeOwner() const
 {
-	if (this->_editingText || this->_emotePickerOpen || this->_quickMessageMenuOpen)
+	if (this->_editingText || this->_emotePickerOpen || this->_quickMessageMenuOpen || this->_hostlist)
 		return EscapeOwner::MOD_UI;
 	if (std::any_of(this->_hotkeyEvents.begin(), this->_hotkeyEvents.end(), [](const HotkeyEvent &event) {
 		return event.pressed && (event.key == VK_F1 || event.key == VK_F2);

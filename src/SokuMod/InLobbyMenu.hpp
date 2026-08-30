@@ -225,6 +225,7 @@ private:
 	EscapeOwner _keyboardEscapeOwner = EscapeOwner::NATIVE_GAME;
 	SokuLib::Scene _keyboardEscapeScene = SokuLib::SCENE_TITLE;
 	bool _lobbyExitRequested = false;
+	bool _hostlistExitRequested = false;
 	SokuLib::DrawUtils::Sprite _quickMessageSprites[9];
 	SokuLib::Vector2i _quickMessageTextSizes[9];
 	SokuLib::DrawUtils::Sprite _chatPopupModeSprites[3];
