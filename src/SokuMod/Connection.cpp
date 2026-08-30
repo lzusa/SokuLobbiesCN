@@ -8,6 +8,7 @@
 std::mutex logMutex;
 #endif
 #include <cstring>
+#include <algorithm>
 #include <vector>
 #include <functional>
 #include <Exceptions.hpp>
@@ -295,8 +296,26 @@ bool Connection::_handlePacket(const Lobbies::PacketKicked &packet, size_t &size
 		return false;
 	}
 	size -= sizeof(packet);
-	if (this->onImpMsg)
-		this->onImpMsg("Kicked: " + std::string(packet.message, strnlen(packet.message, sizeof(packet.message))));
+
+	std::string reason(packet.message, strnlen(packet.message, sizeof(packet.message)));
+	constexpr char inactivePrefix[] = "Kicked for being inactive for ";
+	constexpr char inactiveSuffix[] = " minutes.";
+	bool inactiveAutoKick = false;
+
+	if (
+		reason.size() > sizeof(inactivePrefix) - 1 + sizeof(inactiveSuffix) - 1 &&
+		reason.compare(0, sizeof(inactivePrefix) - 1, inactivePrefix) == 0 &&
+		reason.compare(reason.size() - (sizeof(inactiveSuffix) - 1), sizeof(inactiveSuffix) - 1, inactiveSuffix) == 0
+	) {
+		auto minutesBegin = reason.begin() + sizeof(inactivePrefix) - 1;
+		auto minutesEnd = reason.end() - (sizeof(inactiveSuffix) - 1);
+
+		inactiveAutoKick = std::all_of(minutesBegin, minutesEnd, [](unsigned char c) {
+			return c >= '0' && c <= '9';
+		});
+	}
+	if (!(this->_spectatingArcade && inactiveAutoKick) && this->onImpMsg)
+		this->onImpMsg("Kicked: " + reason);
 	this->_init = false;
 	this->_connected = false;
 	this->_socket.disconnect();
@@ -352,6 +371,7 @@ bool Connection::_handlePacket(const Lobbies::PacketGameStart &packet, size_t &s
 		return false;
 	}
 	size -= sizeof(packet);
+	this->_spectatingArcade = packet.spectator;
 	if (this->onConnectRequest){
 		const char * ip = packet.ip;
 		unsigned short port = packet.port;
@@ -430,6 +450,8 @@ bool Connection::_handlePacket(const Lobbies::PacketArcadeLeave &packet, size_t 
 		return false;
 	}
 	size -= sizeof(packet);
+	if (this->_me && packet.id == this->_me->id)
+		this->_spectatingArcade = false;
 	if (this->onArcadeLeave)
 		this->onArcadeLeave(this->_players[packet.id], this->_players[packet.id].machineId);
 	return true;

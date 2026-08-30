@@ -40,6 +40,7 @@ private:
 	bool _hasConnected = false;
 	bool _connected = true;
 	bool _init = false;
+	bool _spectatingArcade = false;
 	char _uniqueId[16];
 	std::string _name;
 	Socket _socket;
