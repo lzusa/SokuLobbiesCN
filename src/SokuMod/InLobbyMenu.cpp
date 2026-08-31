@@ -2339,7 +2339,7 @@ void InLobbyMenu::_logChatToFile(unsigned player, const std::string &msg)
 
 void InLobbyMenu::onKeyPressed(unsigned chr)
 {
-	if (chr == 0x7F || chr < 32 || !this->_editingText)
+	if (chr == 0x7F || chr < 32 || !this->_editingText || this->_battleChatAwaitRelease)
 		return;
 	this->_textMutex.lock();
 	if (this->_hasSelection())
@@ -2385,11 +2385,15 @@ void InLobbyMenu::onKeyReleased()
 
 void InLobbyMenu::_inputBoxUpdate(bool blockChatInput)
 {
-	if (GetForegroundWindow() != SokuLib::window)
+	if (GetForegroundWindow() != SokuLib::window) {
+		this->_battleChatHolding = false;
+		this->_battleChatHintUntil = {};
 		return;
+	}
 	std::lock_guard<std::mutex> lock_(this->keyTimersMutex);
 	this->_processHotkeyEvents();
-	if (blockChatInput && this->_editingText) {
+	bool openBattleChat = false;
+	if (blockChatInput && !this->_battleChatActive && this->_editingText) {
 		this->_editingText = false;
 		this->_clearSelection();
 		this->_chatOffset = 0;
@@ -2399,6 +2403,34 @@ void InLobbyMenu::_inputBoxUpdate(bool blockChatInput)
 		this->compositionCursor = 0;
 		if (this->immCtx)
 			ImmNotifyIME(this->immCtx, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+	}
+	this->_battleChatActive = blockChatInput;
+	{
+		auto now = std::chrono::steady_clock::now();
+		bool down = (GetAsyncKeyState(chatKey) & 0x8000) != 0;
+		if (this->_battleChatAwaitRelease) {
+			// Do not turn the opening hold (including key repeat) into chat input.
+			this->_battleChatAwaitRelease = down;
+			memset(this->keysPressed, 0, sizeof(this->keysPressed));
+			this->_lastPressed = 0;
+			return;
+		}
+		if (!blockChatInput || this->_editingText || this->_emotePickerOpen || this->_quickMessageMenuOpen) {
+			this->_battleChatHolding = false;
+			this->_battleChatHintUntil = {};
+		} else {
+			if (down || this->keysPressed[chatKey])
+				this->_battleChatHintUntil = now + std::chrono::seconds(2);
+			if (down && !this->_battleChatHolding)
+				this->_battleChatHoldStarted = now;
+			this->_battleChatHolding = down;
+			if (down && now - this->_battleChatHoldStarted >= std::chrono::milliseconds(1500)) {
+				openBattleChat = true;
+				this->_battleChatAwaitRelease = true;
+				this->_battleChatHolding = false;
+				this->_battleChatHintUntil = {};
+			}
+		}
 	}
 	if (this->_emotePickerOpen) {
 		this->_updateEmotePicker();
@@ -2436,7 +2468,7 @@ void InLobbyMenu::_inputBoxUpdate(bool blockChatInput)
 		playSound(0x27);
 	}
 	if (!this->_editingText) {
-		if (!blockChatInput && this->keysPressed[chatKey]) {
+		if (openBattleChat || (!blockChatInput && this->keysPressed[chatKey])) {
 			this->_editingText = true;
 			this->_initInputBox();
 			playSound(0x28);
@@ -3320,6 +3352,58 @@ void InLobbyMenu::updateChat(bool inGame)
 	}
 }
 
+void InLobbyMenu::_renderBattleChatHint()
+{
+	auto now = std::chrono::steady_clock::now();
+	if (!this->_battleChatActive || this->_editingText || now >= this->_battleChatHintUntil)
+		return;
+	auto elapsed = this->_battleChatHolding
+		? std::chrono::duration_cast<std::chrono::milliseconds>(now - this->_battleChatHoldStarted).count() : 0;
+	int remaining = (std::max)(1, 2 - static_cast<int>(elapsed / 1000));
+	std::wstring text = chineseLanguage
+		? L"\u957F\u6309\u804A\u5929\u952E 2 \u79D2\u6253\u5F00\u5BF9\u8BDD\u6846"
+		: L"Hold the chat key for 2 seconds to open chat";
+	text += chineseLanguage ? L"  -  \u5269\u4F59 " : L"  -  ";
+	text += std::to_wstring(remaining);
+	text += chineseLanguage ? L" \u79D2" : L"s remaining";
+	if (text != this->_battleChatHintText) {
+		int textureId = 0;
+		SokuLib::Vector2i size;
+		if (createTextTexture(textureId, text.c_str(), this->_textBubbleFont, {480, 28}, &size, true)) {
+			this->_battleChatHintSprite.texture.setHandle(textureId, {480, 28});
+			this->_battleChatHintSprite.rect = {0, 0, size.x, size.y};
+			this->_battleChatHintSprite.setSize(size.to<unsigned>());
+			this->_battleChatHintSprite.setPosition({320 - size.x / 2, 374});
+			this->_battleChatHintText = text;
+		}
+	}
+	SokuLib::DrawUtils::RectangleShape panel;
+	panel.setPosition({72, 366});
+	panel.setSize({496, 48});
+	panel.setBorderColor(SokuLib::Color{0x78, 0x80, 0x90, 0xD0});
+	panel.setFillColor(SokuLib::Color{0x12, 0x16, 0x20, 0xD0});
+	panel.draw();
+	this->_battleChatHintSprite.draw();
+	// Avoid RectangleShape's asymmetric corner offsets and outline on this thin bar.
+	auto drawBar = [](unsigned width, D3DCOLOR color) {
+		if (!width)
+			return;
+		const float left = 83.5f;
+		const float top = 403.5f;
+		const float right = left + width;
+		SokuLib::DrawUtils::Vertex vertices[] = {
+			{left, top, 0, 1, color, 0, 0},
+			{right, top, 0, 1, color, 0, 0},
+			{right, top + 4, 0, 1, color, 0, 0},
+			{left, top + 4, 0, 1, color, 0, 0}
+		};
+		SokuLib::textureMgr.setTexture(0, 0);
+		SokuLib::pd3dDev->DrawPrimitiveUP(D3DPT_TRIANGLEFAN, 2, vertices, sizeof(*vertices));
+	};
+	drawBar(472, 0xFF343E50);
+	drawBar(static_cast<unsigned>((std::min)(1500LL, elapsed) * 472 / 1500), 0xFF7FA6D9);
+}
+
 void InLobbyMenu::renderChat()
 {
 	if (this->_disconnected)
@@ -3594,6 +3678,7 @@ void InLobbyMenu::renderChat()
 		this->_renderQuickMessageMenu();
 	if (this->_chatPopupModeTimer)
 		this->_renderChatPopupMode();
+	this->_renderBattleChatHint();
 }
 
 void InLobbyMenu::_renderEmotePicker()
@@ -3929,7 +4014,12 @@ void InLobbyMenu::_renderPrivateMessageCompletions()
 
 InLobbyMenu::EscapeOwner InLobbyMenu::_classifyEscapeOwner() const
 {
-	if (this->_editingText || this->_emotePickerOpen || this->_quickMessageMenuOpen || this->_hostlist)
+	if (
+		this->_editingText ||
+		this->_emotePickerOpen ||
+		this->_quickMessageMenuOpen ||
+		(this->_hostlist && SokuLib::sceneId == SokuLib::SCENE_TITLE && SokuLib::newSceneId == SokuLib::SCENE_TITLE)
+	)
 		return EscapeOwner::MOD_UI;
 	if (std::any_of(this->_hotkeyEvents.begin(), this->_hotkeyEvents.end(), [](const HotkeyEvent &event) {
 		return event.pressed && (event.key == VK_F1 || event.key == VK_F2);
@@ -3967,6 +4057,8 @@ void InLobbyMenu::onWindowKeyEvent(unsigned key, bool pressed, bool repeated)
 void InLobbyMenu::onInputFocusLost()
 {
 	std::lock_guard<std::mutex> lock(this->keyTimersMutex);
+	this->_battleChatHolding = false;
+	this->_battleChatHintUntil = {};
 	this->_keyboardEscapeDown = false;
 	this->_mappedEscapeDown = false;
 	this->_hotkeyEvents.clear();

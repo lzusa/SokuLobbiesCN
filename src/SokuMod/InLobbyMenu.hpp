@@ -196,6 +196,13 @@ private:
 	int _selectionStart = -1;
 	int _selectionEnd = -1;
 	bool _editingText = false;
+	bool _battleChatActive = false;
+	bool _battleChatHolding = false;
+	bool _battleChatAwaitRelease = false;
+	std::chrono::steady_clock::time_point _battleChatHoldStarted{};
+	std::chrono::steady_clock::time_point _battleChatHintUntil{};
+	std::wstring _battleChatHintText;
+	SokuLib::DrawUtils::Sprite _battleChatHintSprite;
 	bool _emotePickerOpen = false;
 	bool _emotePickerNavigationHeld = false;
 	unsigned _emotePickerSelection = 0;
@@ -270,6 +277,7 @@ private:
 	void _initQuickMessageSprites();
 	void _initChatPopupModeSprites();
 	void _renderChatPopupMode();
+	void _renderBattleChatHint();
 	void _sendEmote(const LobbyData::Emote &emote);
 	void _normalizeEmotePickerSelection();
 	void _initInputBox();
