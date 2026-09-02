@@ -2540,6 +2540,13 @@ void InLobbyMenu::_inputBoxUpdate(bool blockChatInput)
 			this->_editingText = false;
 			this->_clearSelection();
 			this->_chatOffset = 0;
+			if (blockChatInput) {
+				// The configured chat key is Enter by default. Consume the same
+				// physical press after sending so it cannot start another hold.
+				this->_battleChatAwaitRelease = true;
+				this->_battleChatHolding = false;
+				this->_battleChatHintUntil = {};
+			}
 		}
 		goto ret_reset_keysPressed;
 	}
