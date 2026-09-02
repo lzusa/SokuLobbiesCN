@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <chrono>
+#include <atomic>
 #include <Socket.hpp>
 #include <SokuLib.hpp>
 #include "Connection.hpp"
@@ -53,6 +54,7 @@ private:
 		std::vector<MessageEmote> emotes;
 		std::list<MessageText> text;
 		std::optional<LazyMessage> lazy_message;
+		bool preserveScrollAnchor = false;
 	};
 	struct ArcadeMachine {
 		unsigned id;
@@ -123,6 +125,8 @@ private:
 	std::unordered_set<uint32_t> _playersInsideElevator;
 	unsigned _chatTimer = 0;
 	unsigned _chatOffset = 0;
+	std::atomic_bool _chatScrolledAwayFromBottom{false};
+	std::atomic_bool _battleOpponentChatPopup{false};
 	uint8_t _background = 0;
 	std::string _music;
 	SokuLib::DrawUtils::Sprite _chatSeat;

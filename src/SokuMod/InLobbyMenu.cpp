@@ -585,6 +585,13 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 			}
 		}
 		bool autoPopup = chatPopupMode == CHAT_POPUP_ALL || (chatPopupMode == CHAT_POPUP_OPPONENTS && opponentMessage);
+		const bool inBattle =
+			SokuLib::sceneId == SokuLib::SCENE_BATTLECL ||
+			SokuLib::sceneId == SokuLib::SCENE_BATTLESV ||
+			SokuLib::newSceneId == SokuLib::SCENE_BATTLECL ||
+			SokuLib::newSceneId == SokuLib::SCENE_BATTLESV;
+		if (inBattle && opponentMessage && chatPopupMode != CHAT_POPUP_NEVER)
+			this->_battleOpponentChatPopup.store(true, std::memory_order_relaxed);
 		auto endsWith = [&msg](const char *suffix) {
 			auto length = strlen(suffix);
 
@@ -1811,6 +1818,7 @@ void InLobbyMenu::_addMessageToList(unsigned int channel, unsigned player, const
 		this->_chatTimer = 900;
 	std::lock_guard<std::mutex> lock(this->_chatMessagesMutex);
 	this->_chatMessages.emplace_front();
+	this->_chatMessages.front().preserveScrollAnchor = this->_chatScrolledAwayFromBottom.load(std::memory_order_relaxed);
 	this->_chatMessages.front().lazy_message.emplace(channel, player, msg, colorOverride);
 }
 
@@ -2397,6 +2405,7 @@ void InLobbyMenu::_inputBoxUpdate(bool blockChatInput)
 		this->_editingText = false;
 		this->_clearSelection();
 		this->_chatOffset = 0;
+		this->_chatScrolledAwayFromBottom.store(false, std::memory_order_relaxed);
 		this->_privateMessageCompletions.clear();
 		this->_privateMessageCompletionTimer = 0;
 		this->immComposition.clear();
@@ -2447,6 +2456,7 @@ void InLobbyMenu::_inputBoxUpdate(bool blockChatInput)
 			this->_editingText = false;
 			this->_clearSelection();
 			this->_chatOffset = 0;
+			this->_chatScrolledAwayFromBottom.store(false, std::memory_order_relaxed);
 			this->_chatTimer = 0;
 			this->_chatSeat.tint.a = 0;
 		}
@@ -2457,6 +2467,7 @@ void InLobbyMenu::_inputBoxUpdate(bool blockChatInput)
 	if (this->keysPressed[VK_PRIOR]) {
 		playSound(0x27);
 		this->_chatOffset += SCROLL_AMOUNT;
+		this->_chatScrolledAwayFromBottom.store(true, std::memory_order_relaxed);
 		this->_chatTimer = max(this->_chatTimer, 180);
 	}
 	if (this->keysPressed[VK_NEXT]) {
@@ -2464,6 +2475,7 @@ void InLobbyMenu::_inputBoxUpdate(bool blockChatInput)
 			this->_chatOffset = 0;
 		else
 			this->_chatOffset -= SCROLL_AMOUNT;
+		this->_chatScrolledAwayFromBottom.store(this->_chatOffset != 0, std::memory_order_relaxed);
 		this->_chatTimer = max(this->_chatTimer, 180);
 		playSound(0x27);
 	}
@@ -2518,6 +2530,7 @@ void InLobbyMenu::_inputBoxUpdate(bool blockChatInput)
 	if (this->keysPressed[VK_UP]) {
 		playSound(0x27);
 		this->_chatOffset += SCROLL_AMOUNT;
+		this->_chatScrolledAwayFromBottom.store(true, std::memory_order_relaxed);
 		this->_chatTimer = max(this->_chatTimer, 180);
 		goto ret_reset_keysPressed;
 	}
@@ -2526,6 +2539,7 @@ void InLobbyMenu::_inputBoxUpdate(bool blockChatInput)
 			this->_chatOffset = 0;
 		else
 			this->_chatOffset -= SCROLL_AMOUNT;
+		this->_chatScrolledAwayFromBottom.store(this->_chatOffset != 0, std::memory_order_relaxed);
 		this->_chatTimer = max(this->_chatTimer, 180);
 		playSound(0x27);
 		goto ret_reset_keysPressed;
@@ -2540,6 +2554,7 @@ void InLobbyMenu::_inputBoxUpdate(bool blockChatInput)
 			this->_editingText = false;
 			this->_clearSelection();
 			this->_chatOffset = 0;
+			this->_chatScrolledAwayFromBottom.store(false, std::memory_order_relaxed);
 			if (blockChatInput) {
 				// The configured chat key is Enter by default. Consume the same
 				// physical press after sending so it cannot start another hold.
@@ -3354,7 +3369,7 @@ void InLobbyMenu::updateChat(bool inGame)
 		this->_chatPopupModeTimer--;
 	if (this->_editingText)
 		this->_chatTimer = 300;
-	else if (inGame)
+	else if (inGame && !this->_battleOpponentChatPopup.load(std::memory_order_relaxed))
 		this->_chatTimer = this->_chatSeat.tint.a != 0;
 	if (this->_chatTimer) {
 		this->_chatTimer--;
@@ -3362,7 +3377,8 @@ void InLobbyMenu::updateChat(bool inGame)
 		unsigned char alpha = this->_chatTimer > 120 ? 255 : (this->_chatTimer * 255 / 120);
 
 		this->_chatSeat.tint.a = alpha;
-	}
+	} else
+		this->_battleOpponentChatPopup.store(false, std::memory_order_relaxed);
 }
 
 void InLobbyMenu::_renderBattleChatHint()
@@ -3441,6 +3457,8 @@ void InLobbyMenu::renderChat()
 			// create sprites if they haven't been created
 			if (msg.lazy_message.has_value()) {
 				auto m = it;
+				const bool preserveScrollAnchor = msg.preserveScrollAnchor && this->_chatOffset != 0;
+				unsigned generatedHeight = 0;
 				std::string line;
 				std::string word;
 				std::string token;
@@ -3475,8 +3493,16 @@ void InLobbyMenu::renderChat()
 					startPos = pos;
 					line.clear();
 				};
+				auto getLineHeight = [](const Message &message) {
+					int height = message.emotes.empty() ? 0 : EMOTE_SIZE;
+					for (const auto &text : message.text)
+						height = max(height, text.realSize.y);
+					return static_cast<unsigned>(height);
+				};
 				auto nextLine = [&]{
 					pushText();
+					if (preserveScrollAnchor)
+						generatedHeight += getLineHeight(*m);
 					m = this->_chatMessages.emplace(m);
 					pos = 0;
 				};
@@ -3569,6 +3595,12 @@ void InLobbyMenu::renderChat()
 				}
 				line += word;
 				pushText();
+				if (preserveScrollAnchor) {
+					generatedHeight += getLineHeight(*m);
+					this->_chatOffset += generatedHeight;
+					remaining += generatedHeight;
+				}
+				msg.preserveScrollAnchor = false;
 				msg.lazy_message.reset();
 			}
 
