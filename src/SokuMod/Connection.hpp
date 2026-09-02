@@ -8,6 +8,7 @@
 
 #include <thread>
 #include <mutex>
+#include <atomic>
 #include <optional>
 #include <functional>
 #include <Packet.hpp>
@@ -40,7 +41,9 @@ private:
 	bool _hasConnected = false;
 	bool _connected = true;
 	bool _init = false;
-	bool _spectatingArcade = false;
+	std::atomic_bool _spectatingArcade{false};
+	std::atomic_bool _spectatingScene{false};
+	std::atomic_llong _lastSpectatingAtMs{0};
 	char _uniqueId[16];
 	std::string _name;
 	Socket _socket;
@@ -108,6 +111,7 @@ public:
 	std::vector<Player> getPlayers() const;
 	std::vector<std::string> getMessages() const;
 	void updatePlayers(const std::vector<LobbyData::Avatar> &avatars);
+	void setSpectatingScene(bool spectating);
 };
 
 

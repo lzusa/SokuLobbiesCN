@@ -9,6 +9,7 @@ std::mutex logMutex;
 #endif
 #include <cstring>
 #include <algorithm>
+#include <chrono>
 #include <vector>
 #include <functional>
 #include <Exceptions.hpp>
@@ -22,6 +23,13 @@ extern unsigned char soku2Major;
 extern unsigned char soku2Minor;
 extern char soku2Letter;
 extern bool soku2Force;
+
+static long long steadyClockMilliseconds()
+{
+	return std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()
+	).count();
+}
 
 void Connection::_netLoop()
 {
@@ -314,7 +322,16 @@ bool Connection::_handlePacket(const Lobbies::PacketKicked &packet, size_t &size
 			return c >= '0' && c <= '9';
 		});
 	}
-	if (!(this->_spectatingArcade && inactiveAutoKick) && this->onImpMsg)
+	auto nowMs = steadyClockMilliseconds();
+	auto lastSpectatingAtMs = this->_lastSpectatingAtMs.load();
+	bool recentlySpectating = lastSpectatingAtMs > 0 && nowMs - lastSpectatingAtMs <= 10000;
+	bool inSpectatingScene =
+		SokuLib::sceneId == SokuLib::SCENE_LOADINGWATCH ||
+		SokuLib::sceneId == SokuLib::SCENE_BATTLEWATCH ||
+		SokuLib::newSceneId == SokuLib::SCENE_LOADINGWATCH ||
+		SokuLib::newSceneId == SokuLib::SCENE_BATTLEWATCH;
+	bool spectatorContext = this->_spectatingArcade.load() || this->_spectatingScene.load() || inSpectatingScene || recentlySpectating;
+	if (!(spectatorContext && inactiveAutoKick) && this->onImpMsg)
 		this->onImpMsg("Kicked: " + reason);
 	this->_init = false;
 	this->_connected = false;
@@ -372,6 +389,8 @@ bool Connection::_handlePacket(const Lobbies::PacketGameStart &packet, size_t &s
 	}
 	size -= sizeof(packet);
 	this->_spectatingArcade = packet.spectator;
+	if (packet.spectator)
+		this->_lastSpectatingAtMs = steadyClockMilliseconds();
 	if (this->onConnectRequest){
 		const char * ip = packet.ip;
 		unsigned short port = packet.port;
@@ -455,6 +474,13 @@ bool Connection::_handlePacket(const Lobbies::PacketArcadeLeave &packet, size_t 
 	if (this->onArcadeLeave)
 		this->onArcadeLeave(this->_players[packet.id], this->_players[packet.id].machineId);
 	return true;
+}
+
+void Connection::setSpectatingScene(bool spectating)
+{
+	this->_spectatingScene = spectating;
+	if (spectating)
+		this->_lastSpectatingAtMs = steadyClockMilliseconds();
 }
 
 bool Connection::_handlePacket(const Lobbies::PacketMessage &packet, size_t &size)

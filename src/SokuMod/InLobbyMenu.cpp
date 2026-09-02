@@ -3322,6 +3322,12 @@ void InLobbyMenu::_sendEmote(const LobbyData::Emote &emote)
 
 void InLobbyMenu::updateChat(bool inGame)
 {
+	this->_connection->setSpectatingScene(
+		SokuLib::sceneId == SokuLib::SCENE_LOADINGWATCH ||
+		SokuLib::sceneId == SokuLib::SCENE_BATTLEWATCH ||
+		SokuLib::newSceneId == SokuLib::SCENE_LOADINGWATCH ||
+		SokuLib::newSceneId == SokuLib::SCENE_BATTLEWATCH
+	);
 	if (this->_privateMessageCompletionTimer)
 		this->_privateMessageCompletionTimer--;
 	if (this->_disconnected)
