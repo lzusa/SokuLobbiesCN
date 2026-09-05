@@ -3124,15 +3124,15 @@ bool InLobbyMenu::_handleLocalTeleport(const std::wstring &msg)
 	if (msg.size() < 3 || _wcsnicmp(msg.c_str(), L"/tp", 3) != 0 || (msg.size() != 3 && !iswspace(msg[3])))
 		return false;
 
-	auto showError = [this](const std::string &message) {
-		this->_addMessageToList(0xFF0000, 0, message);
+	auto showError = [this](const std::string &chinese, const std::string &english) {
+		this->_addMessageToList(0xFF0000, 0, chinese + "\n" + english);
 	};
 	if (this->_currentMachine || SokuLib::sceneId != SokuLib::SCENE_TITLE) {
-		showError("Leave the battle or spectator machine before using /tp.");
+		showError("请先离开对战机或观战机再使用 /tp。", "Leave the battle or spectator machine before using /tp.");
 		return true;
 	}
 	if (this->_currentElevator) {
-		showError("You cannot use /tp while inside an elevator.");
+		showError("在电梯内无法使用 /tp。", "You cannot use /tp while inside an elevator.");
 		return true;
 	}
 	std::wstring argument = msg.substr(3);
@@ -3141,7 +3141,7 @@ bool InLobbyMenu::_handleLocalTeleport(const std::wstring &msg)
 	while (!argument.empty() && iswspace(argument.back()))
 		argument.pop_back();
 	if (argument.empty()) {
-		showError("Usage: /tp <player>");
+		showError("用法：/tp <玩家>", "Usage: /tp <player>");
 		return true;
 	}
 
@@ -3155,7 +3155,7 @@ bool InLobbyMenu::_handleLocalTeleport(const std::wstring &msg)
 					break;
 				}
 		} catch (...) {
-			showError("Invalid player name.");
+			showError("玩家名称无效。", "Invalid player name.");
 			return true;
 		}
 	} else {
@@ -3168,21 +3168,21 @@ bool InLobbyMenu::_handleLocalTeleport(const std::wstring &msg)
 			if (found != this->_playersById.end())
 				target = found->second;
 		} catch (...) {
-			showError("Player must be an id or an exact @name.");
+			showError("玩家必须使用数字 ID 或准确的 @名称。", "Player must be an id or an exact @name.");
 			return true;
 		}
 	}
 	if (!target) {
-		showError("Cannot find that player.");
+		showError("找不到该玩家。", "Cannot find that player.");
 		return true;
 	}
 	auto me = this->_connection->getMe();
 	if (!me) {
-		showError("Your lobby player is not ready.");
+		showError("你的大厅角色尚未准备好。", "Your lobby player is not ready.");
 		return true;
 	}
 	if (target->id == me->id) {
-		showError("You are already at your own position.");
+		showError("你已经在自己的位置。", "You are already at your own position.");
 		return true;
 	}
 
@@ -3190,7 +3190,10 @@ bool InLobbyMenu::_handleLocalTeleport(const std::wstring &msg)
 	if (now < this->_nextTeleportAt) {
 		auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(this->_nextTeleportAt - now);
 		auto seconds = (remaining.count() + 999) / 1000;
-		showError("You can use /tp again in " + std::to_string(seconds) + " seconds.");
+		showError(
+			"还需等待 " + std::to_string(seconds) + " 秒才能再次使用 /tp。",
+			"You can use /tp again in " + std::to_string(seconds) + " seconds."
+		);
 		return true;
 	}
 
@@ -3208,7 +3211,7 @@ bool InLobbyMenu::_handleLocalTeleport(const std::wstring &msg)
 		}
 	}
 	if (targetPlatform == background.platforms.size()) {
-		showError("That player is not on a reachable platform.");
+		showError("该玩家不在可到达的平台上。", "That player is not on a reachable platform.");
 		return true;
 	}
 
@@ -3231,11 +3234,79 @@ bool InLobbyMenu::_handleLocalHelp(const std::wstring &msg)
 		command.erase(command.begin());
 	while (!command.empty() && iswspace(command.back()))
 		command.pop_back();
+	if (chineseLanguage) {
+		if (command.size() < 5 || _wcsnicmp(command.c_str(), L"/help", 5) != 0)
+			return false;
+		if (command.size() > 5 && !iswspace(command[5]))
+			return false;
+
+		auto addChineseHelp = [this](const wchar_t *text, unsigned color = 0xFFFF00) {
+			this->_addMessageToList(
+				color,
+				0,
+				convertEncoding<wchar_t, char, UTF16Decode, UTF8Encode>(text)
+			);
+		};
+		if (command.size() == 5) {
+			addChineseHelp(
+				L"可用指令：\n"
+				L"/help [指令]\n"
+				L"/join <玩家>\n"
+				L"/list\n"
+				L"/locate <玩家>\n"
+				L"/msg <玩家> <消息>\n"
+				L"/report [玩家] <原因>\n"
+				L"/tp <玩家>\n"
+				L"玩家联想：输入玩家后使用 Tab 或上下键选择。"
+			);
+			return true;
+		}
+
+		auto argument = command.substr(6);
+		while (!argument.empty() && iswspace(argument.front()))
+			argument.erase(argument.begin());
+		while (!argument.empty() && iswspace(argument.back()))
+			argument.pop_back();
+		if (!argument.empty() && argument.front() == L'/')
+			argument.erase(argument.begin());
+
+		const wchar_t *helpText = nullptr;
+		if (_wcsicmp(argument.c_str(), L"help") == 0)
+			helpText = L"/help [指令]：显示全部指令，或查看指定指令的详细帮助。\n示例：\n/help\n/help report";
+		else if (_wcsicmp(argument.c_str(), L"join") == 0)
+			helpText = L"/join <玩家>：加入该玩家所在的对战机。支持数字 ID 或准确的 @玩家名。\n示例：\n/join 1\n/join @PinkySmile";
+		else if (_wcsicmp(argument.c_str(), L"list") == 0)
+			helpText = L"/list：显示当前大厅内所有玩家的 ID 和名称。";
+		else if (_wcsicmp(argument.c_str(), L"locate") == 0)
+			helpText = L"/locate <玩家>：显示玩家当前在大厅中的坐标。支持数字 ID 或准确的 @玩家名。\n示例：\n/locate 1\n/locate @PinkySmile";
+		else if (_wcsicmp(argument.c_str(), L"msg") == 0)
+			helpText = L"/msg <玩家> <消息>：向玩家发送私聊消息。支持数字 ID 或准确的 @玩家名。\n示例：\n/msg 1 你好\n/msg @PinkySmile 你好";
+		else if (_wcsicmp(argument.c_str(), L"report") == 0)
+			helpText =
+				L"/report [玩家] <原因>\n"
+				L"举报内容只有管理员可见。\n"
+				L"如举报在线玩家，可指定数字 ID 或 @玩家名。\n"
+				L"如举报玩家不在大厅内，可省略玩家直接填写原因。\n"
+				L"举报后请将证据发到群178884533，或私聊群管理员。\n"
+				L"示例：\n"
+				L"/report @PinkySmile 多次骚扰\n"
+				L"/report 被举报人已经离开大厅";
+		else if (_wcsicmp(argument.c_str(), L"tp") == 0)
+			helpText = L"/tp <玩家>：传送到指定玩家的位置。支持数字 ID 或准确的 @玩家名；冷却时间为60秒，在对战机、观战机或电梯内无法使用。\n示例：\n/tp 1\n/tp @PinkySmile";
+
+		if (helpText)
+			addChineseHelp(helpText);
+		else {
+			std::wstring error = L"未知指令：" + argument + L"。使用 /help 查看可用指令。";
+			addChineseHelp(error.c_str(), 0xFF0000);
+		}
+		return true;
+	}
 	if (_wcsicmp(command.c_str(), L"/help") == 0) {
 		this->_addMessageToList(
 			0xFFFF00,
 			0,
-			"Client command:\n/tp <player>\nPlayer completion: use Tab or Up/Down after /msg, /report, /join, /locate, or /tp."
+			"Client command:\n/tp <player>\n/report [player] <reason>: The player is optional; omit it if they have left the lobby. Then send supporting evidence in QQ group 178884533 or privately message an administrator from the group.\nPlayer completion: use Tab or Up/Down after /msg, /report, /join, /locate, or /tp."
 		);
 		return false;
 	}
@@ -3941,6 +4012,14 @@ bool InLobbyMenu::_getPlayerCompletionTarget(size_t &targetStart, size_t &target
 			if (iswspace(text[targetEnd]))
 				break;
 		}
+		// A report containing more text without an explicit @name is the
+		// reason-only form, not a player completion target.
+		if (
+			wcscmp(prefix.text, L"/report ") == 0 &&
+			targetEnd < text.size() &&
+			(targetStart >= text.size() || text[targetStart] != L'@')
+		)
+			return false;
 		appendSpace = prefix.appendSpace;
 		return this->_textCursorPosIndex >= static_cast<int>(targetStart);
 	}

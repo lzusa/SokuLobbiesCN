@@ -184,7 +184,7 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
 		src/Common/shiftJISConvTable.inl
 		src/Common/shiftJISReverseConvTable.inl
 	)
-	target_compile_options(SokuLobbiesMod PRIVATE /Zi)
+	target_compile_options(SokuLobbiesMod PRIVATE /Zi /utf-8)
 	target_compile_definitions("SokuLobbiesMod" PRIVATE DIRECTINPUT_VERSION=0x0800 _CRT_SECURE_NO_WARNINGS)
 	target_link_libraries(
 		SokuLobbiesMod
