@@ -156,7 +156,8 @@ std::wstring localizedChoice(const std::string &label)
 		{"English", L"\u82F1\u6587"}, {"Chinese", L"\u4E2D\u6587"}, {"All", L"\u6240\u6709\u4EBA"}, {"Battle Players", L"\u5BF9\u6218\u73A9\u5BB6"}, {"Never", L"\u4ECE\u4E0D"},
 		{"Off", L"\u5173\u95ED"}, {"On", L"\u5F00\u542F"}, {"Soft Blue", L"\u67D4\u548C\u84DD"}, {"Gold", L"\u91D1\u8272"}, {"Soft Pink", L"\u67D4\u548C\u7C89"},
 		{"Soft Green", L"\u67D4\u548C\u7EFF"}, {"Orange", L"\u6A59\u8272"}, {"Purple", L"\u7D2B\u8272"}, {"White", L"\u767D\u8272"}, {"Auto", L"\u81EA\u52A8"},
-		{"Open Folder", L"\u6253\u5F00\u6587\u4EF6\u5939"}, {"Restore Defaults", L"\u6062\u590D\u9ED8\u8BA4\u914D\u7F6E"}, {"Edit 1-9", L"\u7F16\u8F91 1-9"}
+		{"Open Folder", L"\u6253\u5F00\u6587\u4EF6\u5939"}, {"Restore Defaults", L"\u6062\u590D\u9ED8\u8BA4\u914D\u7F6E"}, {"Edit 1-9", L"\u7F16\u8F91 1-9"},
+		{"Enter", L"\u56DE\u8F66"}, {"Space", L"\u7A7A\u683C"}
 	};
 	auto found = labels.find(label);
 	return found == labels.end() ? std::wstring(label.begin(), label.end()) : found->second;
@@ -288,7 +289,7 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 			setWideInputBoxCallbacks([this](const std::wstring &input) {
 				unsigned value;
 				if (!parseUnsignedInput(input, 1, 10000, value)) {
-					this->_showStatus("Enter a number from 1 to 10000.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
+					this->_showStatus(chineseLanguage ? L"\u8BF7\u8F93\u5165 1 \u5230 10000 \u4E4B\u95F4\u7684\u6570\u5B57\u3002" : L"Enter a number from 1 to 10000.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
 					playSound(0x29);
 					return;
 				}
@@ -302,7 +303,7 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 				this->_refreshValue(option);
 				playSound(0x28);
 			});
-			openWideInputDialog(L"Max Chat Messages (1-10000) - Enter: Save / ESC: Cancel", std::to_wstring(maxChatMessages), 5);
+			openWideInputDialog(chineseLanguage ? L"\u6700\u5927\u804A\u5929\u8BB0\u5F55\u6570\uFF081-10000\uFF09- Enter\uFF1A\u4FDD\u5B58 / ESC\uFF1A\u53D6\u6D88" : L"Max Chat Messages (1-10000) - Enter: Save / ESC: Cancel", std::to_wstring(maxChatMessages), 5);
 		}
 	});
 	this->_addOption({
@@ -314,7 +315,7 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 		[this] {
 			this->_capturingChatKey = true;
 			this->_chatKeyCaptureArmed = false;
-			this->_showStatus("Release the current key, then press a new chat key. ESC cancels.", SokuLib::Color{0xFF, 0xE0, 0x90, 0xFF});
+			this->_showStatus(chineseLanguage ? L"\u677E\u5F00\u5F53\u524D\u6309\u952E\u540E\u6309\u4E0B\u65B0\u7684\u804A\u5929\u952E\uFF0C\u6309 ESC \u53D6\u6D88\u3002" : L"Release the current key, then press a new chat key. ESC cancels.", SokuLib::Color{0xFF, 0xE0, 0x90, 0xFF});
 		}
 	});
 	this->_addOption({
@@ -342,7 +343,7 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 			setWideInputBoxCallbacks([this](const std::wstring &value) {
 				std::wstring host;
 				if (!parseHostIp(value, host)) {
-					this->_showStatus("Invalid Host IP. Use an IPv4 address with an optional port.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
+					this->_showStatus(chineseLanguage ? L"\u5BF9\u6218 IP \u65E0\u6548\uFF0C\u8BF7\u8F93\u5165 IPv4 \u5730\u5740\uFF0C\u53EF\u9644\u5E26\u7AEF\u53E3\u3002" : L"Invalid Host IP. Use an IPv4 address with an optional port.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
 					playSound(0x29);
 					return;
 				}
@@ -357,10 +358,10 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 					found->choices[0].label = hostIpLabel(host);
 					this->_refreshValue(*found);
 				}
-				this->_showStatus(host.empty() ? "Host IP set to automatic." : "Host IP saved.", SokuLib::Color{0x90, 0xE0, 0xA0, 0xFF});
+				this->_showStatus(chineseLanguage ? (host.empty() ? L"\u5BF9\u6218 IP \u5DF2\u8BBE\u4E3A\u81EA\u52A8\u83B7\u53D6\u3002" : L"\u5BF9\u6218 IP \u5DF2\u4FDD\u5B58\u3002") : (host.empty() ? L"Host IP set to automatic." : L"Host IP saved."), SokuLib::Color{0x90, 0xE0, 0xA0, 0xFF});
 				playSound(0x28);
 			});
-			openWideInputDialog(L"Host IP (blank = Auto) - Ctrl+V / Enter: Save / ESC: Cancel", current, 255);
+			openWideInputDialog(chineseLanguage ? L"\u5BF9\u6218 IP\uFF08\u7559\u7A7A\u4E3A\u81EA\u52A8\uFF09- Ctrl+V / Enter\uFF1A\u4FDD\u5B58 / ESC\uFF1A\u53D6\u6D88" : L"Host IP (blank = Auto) - Ctrl+V / Enter: Save / ESC: Cancel", current, 255);
 		}
 	});
 	this->_addOption({
@@ -375,12 +376,12 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 				std::filesystem::create_directories(folder);
 				auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(SokuLib::window, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
 				if (result <= 32) {
-					this->_showStatus("Could not open the chat log folder.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
+					this->_showStatus(chineseLanguage ? L"\u65E0\u6CD5\u6253\u5F00\u804A\u5929\u65E5\u5FD7\u6587\u4EF6\u5939\u3002" : L"Could not open the chat log folder.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
 					playSound(0x29);
 				} else
 					playSound(0x28);
 			} catch (...) {
-				this->_showStatus("Could not open the chat log folder.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
+				this->_showStatus(chineseLanguage ? L"\u65E0\u6CD5\u6253\u5F00\u804A\u5929\u65E5\u5FD7\u6587\u4EF6\u5939\u3002" : L"Could not open the chat log folder.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
 				playSound(0x29);
 			}
 		}
@@ -392,20 +393,24 @@ OptionsMenu::OptionsMenu(LobbyMenu *parent) :
 		[](unsigned) { return true; },
 		{},
 		[this] {
-			if (MessageBoxW(SokuLib::window, L"Replace SokuLobbies.ini with SokuLobbies-default.ini?\n\nThe game must be restarted afterwards.", L"Reset Lobby Configuration", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+			const auto message = chineseLanguage
+				? L"\u662F\u5426\u4F7F\u7528 SokuLobbies-default.ini \u66FF\u6362\u5F53\u524D\u914D\u7F6E\uFF1F\n\n\u5B8C\u6210\u540E\u5FC5\u987B\u91CD\u542F\u6E38\u620F\u3002"
+				: L"Replace SokuLobbies.ini with SokuLobbies-default.ini?\n\nThe game must be restarted afterwards.";
+			const auto title = chineseLanguage ? L"\u91CD\u7F6E\u5927\u5385\u914D\u7F6E" : L"Reset Lobby Configuration";
+			if (MessageBoxW(SokuLib::window, message, title, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
 				return;
 			auto source = std::filesystem::path(profileFolderPath) / L"SokuLobbies-default.ini";
 			if (!std::filesystem::exists(source)) {
-				this->_showStatus("SokuLobbies-default.ini was not found.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
+				this->_showStatus(chineseLanguage ? L"\u627E\u4E0D\u5230 SokuLobbies-default.ini\u3002" : L"SokuLobbies-default.ini was not found.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
 				playSound(0x29);
 				return;
 			}
 			if (!CopyFileW(source.c_str(), profilePath, FALSE)) {
-				this->_showStatus("Could not restore the default configuration.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
+				this->_showStatus(chineseLanguage ? L"\u65E0\u6CD5\u6062\u590D\u9ED8\u8BA4\u914D\u7F6E\u3002" : L"Could not restore the default configuration.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
 				playSound(0x29);
 				return;
 			}
-			this->_showStatus("Defaults restored. Restart the game to apply them.", SokuLib::Color{0x90, 0xE0, 0xA0, 0xFF});
+			this->_showStatus(chineseLanguage ? L"\u5DF2\u6062\u590D\u9ED8\u8BA4\u914D\u7F6E\uFF0C\u91CD\u542F\u6E38\u620F\u540E\u751F\u6548\u3002" : L"Defaults restored. Restart the game to apply them.", SokuLib::Color{0x90, 0xE0, 0xA0, 0xFF});
 			playSound(0x28);
 		}
 	});
@@ -482,21 +487,19 @@ void OptionsMenu::_refreshLanguage()
 		createLocalizedSprite(option.labelSprite, localizedOptionName(option.name), 16, {300, 24});
 		this->_refreshValue(option);
 	}
+	for (unsigned i = 0; i < this->_messageValues.size(); i++)
+		this->_refreshMessageValue(i);
 }
 
 void OptionsMenu::_showSaveError()
 {
-	this->_showStatus("Could not save SokuLobbies.ini; value was not changed.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
+	this->_showStatus(chineseLanguage ? L"\u65E0\u6CD5\u4FDD\u5B58 SokuLobbies.ini\uFF0C\u672C\u6B21\u4FEE\u6539\u672A\u751F\u6548\u3002" : L"Could not save SokuLobbies.ini; value was not changed.", SokuLib::Color{0xFF, 0x80, 0x80, 0xFF});
 	playSound(0x29);
 }
 
-void OptionsMenu::_showStatus(const char *message, const SokuLib::Color &color)
+void OptionsMenu::_showStatus(const wchar_t *message, const SokuLib::Color &color)
 {
-	SokuLib::Vector2i size;
-	this->_status.texture.createFromText(message, lobbyData->getFont(12), {540, 20}, &size);
-	this->_status.setSize(size.to<unsigned>());
-	this->_status.rect.width = size.x;
-	this->_status.rect.height = size.y;
+	createLocalizedSprite(this->_status, message, 12, {540, 20});
 	this->_status.tint = color;
 	this->_statusTimer = 300;
 }
@@ -511,7 +514,7 @@ void OptionsMenu::_updateChatKeyCapture()
 				continue;
 			if (key == VK_ESCAPE) {
 				this->_capturingChatKey = false;
-				this->_showStatus("Chat key change cancelled.", SokuLib::Color{0xD0, 0xD0, 0xD0, 0xFF});
+				this->_showStatus(chineseLanguage ? L"\u5DF2\u53D6\u6D88\u4FEE\u6539\u804A\u5929\u952E\u3002" : L"Chat key change cancelled.", SokuLib::Color{0xD0, 0xD0, 0xD0, 0xFF});
 				playSound(0x29);
 				return;
 			}
@@ -527,13 +530,13 @@ void OptionsMenu::_updateChatKeyCapture()
 				this->_refreshValue(*found);
 			}
 			this->_capturingChatKey = false;
-			this->_showStatus("Chat key updated.", SokuLib::Color{0x90, 0xE0, 0xA0, 0xFF});
+			this->_showStatus(chineseLanguage ? L"\u804A\u5929\u952E\u5DF2\u66F4\u65B0\u3002" : L"Chat key updated.", SokuLib::Color{0x90, 0xE0, 0xA0, 0xFF});
 			playSound(0x28);
 			return;
 		}
 	if (!this->_chatKeyCaptureArmed && !anyKeyDown) {
 		this->_chatKeyCaptureArmed = true;
-		this->_showStatus("Press the new chat key. ESC cancels.", SokuLib::Color{0xFF, 0xE0, 0x90, 0xFF});
+		this->_showStatus(chineseLanguage ? L"\u8BF7\u6309\u4E0B\u65B0\u7684\u804A\u5929\u952E\uFF0C\u6309 ESC \u53D6\u6D88\u3002" : L"Press the new chat key. ESC cancels.", SokuLib::Color{0xFF, 0xE0, 0x90, 0xFF});
 	}
 }
 
@@ -564,7 +567,7 @@ void OptionsMenu::_initMessageEditor()
 
 void OptionsMenu::_refreshMessageValue(unsigned index)
 {
-	std::wstring value = quickMessages[index].empty() ? L"(not configured)" : quickMessages[index];
+	std::wstring value = quickMessages[index].empty() ? (chineseLanguage ? L"\uFF08\u672A\u914D\u7F6E\uFF09" : L"(not configured)") : quickMessages[index];
 	if (value.size() > 48) {
 		value.resize(45);
 		if (!value.empty() && value.back() >= 0xD800 && value.back() <= 0xDBFF)
@@ -591,7 +594,9 @@ void OptionsMenu::_refreshMessageValue(unsigned index)
 
 void OptionsMenu::_openMessageEditor(unsigned index)
 {
-	std::wstring title = L"Quick Message " + std::to_wstring(index + 1) + L" - Enter: Save / ESC: Cancel";
+	std::wstring title = chineseLanguage
+		? L"\u5FEB\u6377\u5BF9\u8BDD " + std::to_wstring(index + 1) + L" - Enter\uFF1A\u4FDD\u5B58 / ESC\uFF1A\u53D6\u6D88"
+		: L"Quick Message " + std::to_wstring(index + 1) + L" - Enter: Save / ESC: Cancel";
 	setWideInputBoxCallbacks([this, index](const std::wstring &value) {
 		wchar_t key[32];
 		std::swprintf(key, 32, L"QuickMessage%u", index + 1);
