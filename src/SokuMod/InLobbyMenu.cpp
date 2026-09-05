@@ -163,6 +163,22 @@ static std::string localizeLobbyMessage(const std::string &message)
 	return localized;
 }
 
+static std::wstring messageBoxText(const std::string &text)
+{
+	try {
+		return convertEncoding<char, wchar_t, UTF8Decode, UTF16Encode>(text);
+	} catch (...) {
+		if (text.empty())
+			return {};
+		int size = MultiByteToWideChar(CP_ACP, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+		if (size <= 0)
+			return std::wstring(text.begin(), text.end());
+		std::wstring result(size, L'\0');
+		MultiByteToWideChar(CP_ACP, 0, text.data(), static_cast<int>(text.size()), result.data(), size);
+		return result;
+	}
+}
+
 static bool isRectVisible(int x, int y, int width, int height, int margin = 0)
 {
 	return x + width >= -margin && y + height >= -margin && x <= 640 + margin && y <= 480 + margin;
@@ -436,13 +452,15 @@ bool checkIp(const std::string &ip)
 
 void InLobbyMenu::_openMessageBox(int sound, const std::string &text, const std::string &title, UINT type)
 {
+	auto wideText = messageBoxText(text);
+	auto wideTitle = messageBoxText(title);
 	if (SokuLib::sceneId == SokuLib::SCENE_BATTLECL || SokuLib::sceneId == SokuLib::SCENE_BATTLESV) {
 		std::lock_guard<std::mutex> messageBoxMutexGuard(this->_messageBoxQueueMutex);
-		this->_messageBoxQueue.push(MessageBoxArgs{sound, text, title, type});
+		this->_messageBoxQueue.push(MessageBoxArgs{sound, std::move(wideText), std::move(wideTitle), type});
 	}
 	else {
 		playSound(sound);
-		MessageBox(SokuLib::window, text.c_str(), title.c_str(), type);
+		MessageBoxW(SokuLib::window, wideText.c_str(), wideTitle.c_str(), type);
 	}
 }
 
@@ -817,7 +835,7 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		}
 		playSound(38);
 		this->_wasConnected = true;
-		MessageBox(SokuLib::window, "Failed to join lobby: Connection timed out.", "Timed out", MB_ICONERROR);
+		MessageBoxW(SokuLib::window, L"Failed to join lobby: Connection timed out.", L"Timed out", MB_ICONERROR);
 	}};
 	ptrMutex.lock();
 	activeMenu = this;
@@ -849,7 +867,7 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 			}
 			const MessageBoxArgs &args = this->_messageBoxQueue.front();
 			playSound(args.sound);
-			MessageBox(SokuLib::window, args.text.c_str(), args.title.c_str(), args.type);
+			MessageBoxW(SokuLib::window, args.text.c_str(), args.title.c_str(), args.type);
 			this->_messageBoxQueue.pop();
 		}
 	}};
@@ -4499,7 +4517,13 @@ void InLobbyMenu::_startHosting()
 			lobbyData->httpRequest("https://konni.delthas.fr/games", "PUT", data.dump());
 			this->_addMessageToList(0x00FF00, 0, "Broadcast to hostlist successful");
 		} catch (std::exception &e) {
-			this->_addMessageToList(0xFF0000, 0, "Hostlist error: " + std::string(e.what()));
+			std::string error = e.what();
+			if (!chineseLanguage)
+				this->_addMessageToList(0xFF0000, 0, "Hostlist error: " + error);
+			else if (error.find("HTTP 400") != std::string::npos && error.find("couldn't connect to host") != std::string::npos)
+				this->_addMessageToList(0xFF0000, 0, "\u521B\u5EFA\u8FDE\u63A5\u5931\u8D25\uFF1A\u8BF7\u786E\u8BA4\u4F60\u5DF2\u7ECF\u4F7F\u7528 swarm \u5EFA\u7ACB\u4E3B\u673A\u6216\u4F7F\u7528 autopunch >= 0.0.4\u3002");
+			else
+				this->_addMessageToList(0xFF0000, 0, "\u521B\u5EFA\u8FDE\u63A5\u5931\u8D25\uFF1A" + error);
 		}
 	}};
 }

@@ -47,6 +47,33 @@ enum MenuItems {
 	MENUITEM_EXIT,
 };
 
+static std::wstring lobbyTextFromUtf8(const std::string &text)
+{
+	try {
+		return convertEncoding<char, wchar_t, UTF8Decode, UTF16Encode>(text);
+	} catch (...) {
+		return std::wstring(text.begin(), text.end());
+	}
+}
+
+static void setLobbyText(SokuLib::DrawUtils::Sprite &sprite, const std::wstring &text, unsigned fontSize, SokuLib::Vector2i bounds)
+{
+	SokuLib::Vector2i size;
+	int textureId = 0;
+	auto &font = lobbyData->getFont(fontSize);
+	const auto originalShadow = font.description.shadow;
+	const bool sharp = std::all_of(text.begin(), text.end(), [](wchar_t chr) { return chr < 0x80; });
+
+	if (!sharp)
+		font.description.shadow = 0;
+	if (createTextTexture(textureId, text.c_str(), font, bounds, &size, sharp)) {
+		sprite.texture.setHandle(textureId, bounds.to<unsigned>());
+		sprite.setSize(size.to<unsigned>());
+		sprite.rect = {0, 0, size.x, size.y};
+	}
+	font.description.shadow = originalShadow;
+}
+
 void displaySokuCursor(SokuLib::Vector2i pos, SokuLib::Vector2u size)
 {
 	SokuLib::Sprite (&CursorSprites)[3] = *(SokuLib::Sprite (*)[3])0x89A6C0;
@@ -144,29 +171,15 @@ LobbyMenu::LobbyMenu(SokuLib::MenuConnect *parent) :
 	this->_version.rect.width = size.x;
 	this->_version.rect.height = size.y;
 
-	this->_customizeTexts[0].texture.createFromText("Avatar", lobbyData->getFont(20), {600, 74});
-	this->_customizeTexts[0].setSize(this->_customizeTexts[0].texture.getSize());
-	this->_customizeTexts[0].rect.width = this->_customizeTexts[0].texture.getSize().x;
-	this->_customizeTexts[0].rect.height = this->_customizeTexts[0].texture.getSize().y;
 	this->_customizeTexts[0].setPosition({120, 98});
 
-	this->_customizeTexts[1].texture.createFromText("Accessory", lobbyData->getFont(20), {600, 74});
-	this->_customizeTexts[1].setSize(this->_customizeTexts[1].texture.getSize());
-	this->_customizeTexts[1].rect.width = this->_customizeTexts[1].texture.getSize().x;
-	this->_customizeTexts[1].rect.height = this->_customizeTexts[1].texture.getSize().y;
 	this->_customizeTexts[1].setPosition({280, 98});
 
-	this->_customizeTexts[2].texture.createFromText("Title", lobbyData->getFont(20), {600, 74});
-	this->_customizeTexts[2].setSize(this->_customizeTexts[2].texture.getSize());
-	this->_customizeTexts[2].rect.width = this->_customizeTexts[2].texture.getSize().x;
-	this->_customizeTexts[2].rect.height = this->_customizeTexts[2].texture.getSize().y;
 	this->_customizeTexts[2].setPosition({475, 98});
 
-	this->_loadingText.texture.createFromText("Connecting to server...", lobbyData->getFont(16), {600, 74});
-	this->_loadingText.setSize(this->_loadingText.texture.getSize());
-	this->_loadingText.rect.width = this->_loadingText.texture.getSize().x;
-	this->_loadingText.rect.height = this->_loadingText.texture.getSize().y;
 	this->_loadingText.setPosition({164, 218});
+	this->_loadingHint.setPosition({164, 240});
+	this->onLanguageChanged();
 
 	this->_messageBox.texture.loadFromGame("data/menu/21_Base.cv2");
 	this->_messageBox.setSize(this->_messageBox.texture.getSize());
@@ -336,14 +349,13 @@ bool LobbyMenu::_normalMenuUpdate()
 		playSound(0x27);
 	}
 	if (SokuLib::inputMgrs.input.spellcard == 1) {
-		setInputBoxCallbacks([this](const std::string &value){
+		setWideInputBoxCallbacks([this](const std::wstring &wideValue) {
 			GuardedMutex m{this->_connectionsMutex};
-
 			try {
+				auto value = convertEncoding<wchar_t, char, UTF16Decode, UTF8Encode>(wideValue);
 				auto colon = value.find_last_of(':');
 				auto ip = value.substr(0, colon);
 				unsigned short port = colon == std::string::npos ? 10800 : std::stoul(value.substr(colon + 1));
-
 				m.lock();
 				this->_connections.emplace_back(new Entry{std::shared_ptr<Connection>(), ip, port});
 				playSound(0x28);
@@ -352,7 +364,7 @@ bool LobbyMenu::_normalMenuUpdate()
 				playSound(0x29);
 			}
 		});
-		openInputDialog("Enter lobby ip", "localhost:10800");
+		openWideInputDialog(chineseLanguage ? L"\u8F93\u5165\u5927\u5385 IP" : L"Enter lobby IP", L"localhost:10800", 255);
 	}
 	if (SokuLib::inputMgrs.input.a == 1) {
 		playSound(0x28);
@@ -372,10 +384,15 @@ bool LobbyMenu::_normalMenuUpdate()
 			this->_menuState = 2;
 			break;
 		case MENUITEM_CREATE_LOBBY:
-			MessageBox(SokuLib::window, "Creating lobbies in game is not yet supported.\nUse the RunServer.bat helper provided with the mod to create a lobby.", "Partially implemented", MB_ICONINFORMATION);
+			MessageBoxW(
+				SokuLib::window,
+				chineseLanguage ? L"\u6682\u4E0D\u652F\u6301\u5728\u6E38\u620F\u5185\u521B\u5EFA\u5927\u5385\u3002\n\u8BF7\u4F7F\u7528\u6A21\u7EC4\u63D0\u4F9B\u7684 RunServer.bat \u521B\u5EFA\u5927\u5385\u3002" : L"Creating lobbies in game is not yet supported.\nUse the RunServer.bat helper provided with the mod to create a lobby.",
+				chineseLanguage ? L"\u90E8\u5206\u529F\u80FD\u5C1A\u672A\u5B9E\u73B0" : L"Partially implemented",
+				MB_ICONINFORMATION
+			);
 			break;
 		case MENUITEM_CUSTOMIZE_LOBBY:
-			MessageBox(SokuLib::window, "Not implemented", "Not implemented", MB_ICONINFORMATION);
+			MessageBoxW(SokuLib::window, chineseLanguage ? L"\u8BE5\u529F\u80FD\u5C1A\u672A\u5B9E\u73B0\u3002" : L"Not implemented", chineseLanguage ? L"\u5C1A\u672A\u5B9E\u73B0" : L"Not implemented", MB_ICONINFORMATION);
 			break;
 		case MENUITEM_OPTIONS:
 			SokuLib::activateMenu(new OptionsMenu(this));
@@ -417,16 +434,16 @@ bool LobbyMenu::_joinLobbyUpdate()
 			auto c = this->_connections[this->_lobbyCtr];
 
 			if (c->passwd) {
-				setInputBoxCallbacks([this, c](const std::string &value){
+				setWideInputBoxCallbacks([this, c](const std::wstring &value){
 					if (c->c && c->c->isConnected()) {
-						c->c->setPassword(value);
+						c->c->setPassword(convertEncoding<wchar_t, char, UTF16Decode, UTF8Encode>(value));
 						SokuLib::activateMenu(new InLobbyMenu(this, this->_parent, c->c));
 						this->_active = false;
 						playSound(0x28);
 					} else
 						playSound(0x29);
 				});
-				openInputDialog("Enter password", "", '*');
+				openWideInputDialog(chineseLanguage ? L"\u8F93\u5165\u5927\u5385\u5BC6\u7801" : L"Enter password", L"", 255, L'*');
 			} else {
 				SokuLib::activateMenu(new InLobbyMenu(this, this->_parent, this->_connections[this->_lobbyCtr]->c));
 				this->_active = false;
@@ -542,6 +559,7 @@ int LobbyMenu::onRender()
 		if (this->_mainServer.isDisconnected()) {
 			this->_messageBox.draw();
 			this->_loadingText.draw();
+			this->_loadingHint.draw();
 			if (this->_lastError.empty()) {
 				this->_loadingGear.setRotation(-this->_loadingGear.getRotation());
 				this->_loadingGear.setPosition({412, 227});
@@ -770,6 +788,11 @@ void LobbyMenu::onLanguageChanged()
 	this->_ui.setSize(this->_ui.texture.getSize());
 	this->_ui.rect.width = this->_ui.getSize().x;
 	this->_ui.rect.height = this->_ui.getSize().y;
+	setLobbyText(this->_customizeTexts[0], chineseLanguage ? L"\u5934\u50CF" : L"Avatar", 20, {600, 74});
+	setLobbyText(this->_customizeTexts[1], chineseLanguage ? L"\u9970\u54C1" : L"Accessory", 20, {600, 74});
+	setLobbyText(this->_customizeTexts[2], chineseLanguage ? L"\u79F0\u53F7" : L"Title", 20, {600, 74});
+	setLobbyText(this->_loadingText, chineseLanguage ? L"\u6B63\u5728\u8FDE\u63A5\u4E3B\u670D\u52A1\u5668..." : L"Connecting to server...", 16, {600, 74});
+	setLobbyText(this->_loadingHint, chineseLanguage ? L"\u6309 S \u5207\u6362\u5230\u666E\u901A\u6A21\u5F0F" : L"Press S to switch to normal mode", 14, {600, 32});
 }
 
 void LobbyMenu::_masterServerLoop()
@@ -779,23 +802,30 @@ void LobbyMenu::_masterServerLoop()
 
 		if (this->_mainServer.isDisconnected())
 			try {
-				auto fct = [this]{
-					this->_loadingText.texture.createFromText(
-						"Connecting to server...<br>Press S to switch to normal mode",
-						lobbyData->getFont(16),
-						{600, 74}
-					);
+					auto fct = [this]{
+						setLobbyText(
+							this->_loadingText,
+							chineseLanguage ? L"\u6B63\u5728\u8FDE\u63A5\u4E3B\u670D\u52A1\u5668..." : L"Connecting to server...",
+							16,
+							{600, 74}
+						);
+						setLobbyText(this->_loadingHint, chineseLanguage ? L"\u6309 S \u5207\u6362\u5230\u666E\u901A\u6A21\u5F0F" : L"Press S to switch to normal mode", 14, {600, 32});
 				};
 				runOnUI(fct);
 				this->_lastError.clear();
 				this->_mainServer.connect(servHost, servPort);
 				puts("Connected!");
 			} catch (std::exception &e) {
-				auto fct = [this, e]{
-					this->_loadingText.texture.createFromText(
-						("Connection failed, auto switch to normal mode:<br><color FF0000>" + std::string(e.what()) + "</color>").c_str(),
-						lobbyData->getFont(16),
-						{600, 74});
+				auto error = lobbyTextFromUtf8(e.what());
+				auto fct = [this, error]{
+					setLobbyText(
+						this->_loadingText,
+						(chineseLanguage ? L"\u8FDE\u63A5\u5931\u8D25\uFF0C\u5DF2\u5207\u6362\u5230\u666E\u901A\u6A21\u5F0F\uFF1A" : L"Connection failed; switched to normal mode: ") + error,
+						16,
+						{600, 74}
+					);
+					this->_loadingHint.texture.destroy();
+					this->_loadingHint.setSize({0, 0});
 				};
 				runOnUI(fct);
 				this->_lastError = e.what();
@@ -843,13 +873,7 @@ void LobbyMenu::_masterServerLoop()
 
 					this->_connectionsMutex.unlock();
 					auto fct = [c]{
-						c->name.texture.createFromText("Connection to the lobby in queue...", lobbyData->getFont(16), {300, 74});
-						c->name.setSize({
-							c->name.texture.getSize().x,
-							c->name.texture.getSize().y
-						});
-						c->name.rect.width = c->name.texture.getSize().x;
-						c->name.rect.height = c->name.texture.getSize().y;
+						setLobbyText(c->name, chineseLanguage ? L"\u5927\u5385\u8FDE\u63A5\u6B63\u5728\u6392\u961F..." : L"Connection to the lobby in queue...", 16, {300, 74});
 						c->name.tint = SokuLib::Color{0xA0, 0xA0, 0xA0, 0xFF};
 					};
 					runOnUI(fct);
@@ -859,12 +883,16 @@ void LobbyMenu::_masterServerLoop()
 		} catch (std::exception &e) {
 			if (dynamic_cast<EOFException *>(&e))
 				this->_mainServer.disconnect();
-			auto fct = [this, e]{
-				this->_loadingText.texture.createFromText(
-					("<color FF0000>Error when communicating with master server:</color><br>" + std::string(e.what())).c_str(),
-					lobbyData->getFont(16),
+			auto error = lobbyTextFromUtf8(e.what());
+			auto fct = [this, error]{
+				setLobbyText(
+					this->_loadingText,
+					(chineseLanguage ? L"\u4E0E\u4E3B\u670D\u52A1\u5668\u901A\u4FE1\u65F6\u51FA\u9519\uFF1A" : L"Error communicating with master server: ") + error,
+					16,
 					{600, 74}
 				);
+				this->_loadingHint.texture.destroy();
+				this->_loadingHint.setSize({0, 0});
 			};
 			runOnUI(fct);
 			this->_lastError = e.what();
@@ -902,13 +930,7 @@ void LobbyMenu::_connectLoop()
 					connection->first = false;
 
 					auto fct = [connection]{
-						connection->name.texture.createFromText("Connecting to lobby...", lobbyData->getFont(16), {300, 74});
-						connection->name.setSize({
-							connection->name.texture.getSize().x,
-							connection->name.texture.getSize().y
-						});
-						connection->name.rect.width = connection->name.texture.getSize().x;
-						connection->name.rect.height = connection->name.texture.getSize().y;
+						setLobbyText(connection->name, chineseLanguage ? L"\u6B63\u5728\u8FDE\u63A5\u5927\u5385..." : L"Connecting to lobby...", 16, {300, 74});
 						connection->name.tint = SokuLib::Color{0xFF, 0xFF, 0x00, 0xFF};
 					};
 					runOnUI(fct);
@@ -1047,8 +1069,14 @@ void LobbyMenu::_refreshAvatarCustomText()
 	this->_customAvatarName.tint = lobbyData->isLocked(avatar) ? SokuLib::Color::Red : SokuLib::Color::Green;
 
 	this->_customAvatarRequ.setPosition({354 + avatar.sprite.rect.width, 330});
-	if (!avatar.requirement)
-		this->_customAvatarRequ.texture.createFromText("Unlocked by default", lobbyData->getFont(12), {600, 74});
+	if (!avatar.requirement) {
+		if (chineseLanguage)
+			setLobbyText(this->_customAvatarRequ, L"\u9ED8\u8BA4\u89E3\u9501", 12, {600, 74});
+		else
+			this->_customAvatarRequ.texture.createFromText("Unlocked by default", lobbyData->getFont(12), {600, 74});
+	} else if (chineseLanguage) {
+		setLobbyText(this->_customAvatarRequ, L"\u89E3\u9501\u6761\u4EF6\uFF1A" + lobbyTextFromUtf8(avatar.requirement->name), 12, {600, 74});
+	}
 	else if (avatar.requirement->name.size() <= 22)
 		this->_customAvatarRequ.texture.createFromText(("Unlocked by completing<br>\"<color 8080FF>" + avatar.requirement->name + "</color>\"").c_str(), lobbyData->getFont(12), {600, 74});
 	else {

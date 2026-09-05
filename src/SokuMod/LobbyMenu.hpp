@@ -65,6 +65,7 @@ private:
 	SokuLib::DrawUtils::Sprite _customAvatarName;
 	SokuLib::DrawUtils::Sprite _customAvatarRequ;
 	SokuLib::DrawUtils::Sprite _loadingText;
+	SokuLib::DrawUtils::Sprite _loadingHint;
 	SokuLib::DrawUtils::Sprite _messageBox;
 	SokuLib::DrawUtils::Sprite _loadingGear;
 	SokuLib::DrawUtils::Sprite _unlock;

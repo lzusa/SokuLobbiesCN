@@ -88,8 +88,8 @@ private:
 	};
 	struct MessageBoxArgs {
 		int sound;
-		std::string text;
-		std::string title;
+		std::wstring text;
+		std::wstring title;
 		UINT type;
 	};
 

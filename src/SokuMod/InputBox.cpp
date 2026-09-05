@@ -44,6 +44,7 @@ static size_t wideCursorPos = 0;
 static size_t wideMaxLength = 0;
 static wchar_t pendingHighSurrogate = 0;
 static std::wstring wideBuffer;
+static wchar_t wideShownChr;
 static std::wstring wideComposition;
 static BYTE current[256];
 static unsigned timers[256];
@@ -87,6 +88,8 @@ static void refreshWideText()
 	if (!wideDirty)
 		return;
 	std::wstring combined = wideBuffer.substr(0, wideCursorPos) + wideComposition + wideBuffer.substr(wideCursorPos);
+	if (wideShownChr)
+		combined.assign(combined.size(), wideShownChr);
 	size_t compositionEnd = wideCursorPos + wideComposition.size();
 	size_t start = 0;
 	while (start < wideCursorPos && getTextSize(combined.substr(start, compositionEnd - start).c_str(), defaultFont12, {2048, 20}, true).x > 284)
@@ -563,6 +566,7 @@ void openInputDialog(const char *title, const char *defaultValue, char shownChar
 	playSound(0x28);
 
 	shownChr = shownChar;
+	wideShownChr = 0;
 	wideMode = false;
 	onWideAcceptFct = {};
 	memset(current, 0, sizeof(current));
@@ -606,7 +610,7 @@ void closeInputDialog()
 	resetInputState();
 }
 
-void openWideInputDialog(const wchar_t *title, const std::wstring &defaultValue, size_t maxLength)
+void openWideInputDialog(const wchar_t *title, const std::wstring &defaultValue, size_t maxLength, wchar_t shownChar)
 {
 	playSound(0x28);
 	memset(current, 0, sizeof(current));
@@ -614,6 +618,7 @@ void openWideInputDialog(const wchar_t *title, const std::wstring &defaultValue,
 	lastPressed = 0;
 	t = 0;
 	wideMode = true;
+	wideShownChr = shownChar;
 	onAcceptFct = {};
 	wideMaxLength = maxLength;
 	wideBuffer = defaultValue.substr(0, maxLength);
