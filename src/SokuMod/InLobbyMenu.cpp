@@ -74,6 +74,95 @@ struct RecentOpponentSession {
 static std::optional<RecentOpponentSession> recentOpponentSession;
 static std::mutex recentOpponentSessionMutex;
 
+static void replaceAll(std::string &value, const std::string &from, const std::string &to)
+{
+	if (from.empty())
+		return;
+	for (size_t pos = 0; (pos = value.find(from, pos)) != std::string::npos; pos += to.size())
+		value.replace(pos, from.size(), to);
+}
+
+static std::string localizeKickReason(const std::string &reason)
+{
+	if (reason == "Timed out")
+		return "连接超时。";
+	if (reason == "Socket error")
+		return "网络连接错误。";
+	if (reason == "Server is full")
+		return "服务器人数已满。";
+	if (reason == "Server closed")
+		return "服务器已关闭。";
+	if (reason == "Incorrect password")
+		return "密码错误。";
+	if (reason == "Outdated server!")
+		return "服务器版本过旧。";
+	if (reason == "You are running an old version of SokuLobbies! Please update your mod and try again.")
+		return "你的 SokuLobbies 版本过旧，请更新模组后重试。";
+	constexpr char inactivePrefix[] = "Kicked for being inactive for ";
+	constexpr char inactiveSuffix[] = " minutes.";
+	if (
+		reason.size() > sizeof(inactivePrefix) - 1 + sizeof(inactiveSuffix) - 1 &&
+		reason.compare(0, sizeof(inactivePrefix) - 1, inactivePrefix) == 0 &&
+		reason.compare(reason.size() - (sizeof(inactiveSuffix) - 1), sizeof(inactiveSuffix) - 1, inactiveSuffix) == 0
+	)
+		return "因持续 " + reason.substr(
+			sizeof(inactivePrefix) - 1,
+			reason.size() - (sizeof(inactivePrefix) - 1) - (sizeof(inactiveSuffix) - 1)
+		) + " 分钟不活跃而被踢出。";
+	constexpr char bannedPrefix[] = "You are banned from this server: ";
+	if (reason.compare(0, sizeof(bannedPrefix) - 1, bannedPrefix) == 0)
+		return "你已被此服务器封禁：" + reason.substr(sizeof(bannedPrefix) - 1);
+	constexpr char invalidNamePrefix[] = "Invalid name (contains ";
+	if (reason.compare(0, sizeof(invalidNamePrefix) - 1, invalidNamePrefix) == 0)
+		return "玩家名称无效（包含 " + reason.substr(sizeof(invalidNamePrefix) - 1);
+	constexpr char protocolPrefix[] = "Protocol error: ";
+	if (reason.compare(0, sizeof(protocolPrefix) - 1, protocolPrefix) == 0)
+		return "协议错误：" + reason.substr(sizeof(protocolPrefix) - 1);
+	constexpr char internalPrefix[] = "Internal server error: ";
+	if (reason.compare(0, sizeof(internalPrefix) - 1, internalPrefix) == 0)
+		return "服务器内部错误：" + reason.substr(sizeof(internalPrefix) - 1);
+	return reason;
+}
+
+static std::string localizeLobbyMessage(const std::string &message)
+{
+	if (!chineseLanguage)
+		return message;
+	if (message == "Connection closed")
+		return "与服务器的连接已关闭。";
+	constexpr char joinedSuffix[] = " has joined the lobby.";
+	constexpr char disconnectedSuffix[] = " has disconnected";
+	constexpr char kickedMarker[] = " has been kicked: ";
+	if (message.size() >= sizeof(joinedSuffix) - 1 && message.compare(message.size() - (sizeof(joinedSuffix) - 1), sizeof(joinedSuffix) - 1, joinedSuffix) == 0)
+		return message.substr(0, message.size() - (sizeof(joinedSuffix) - 1)) + " 已进入大厅。";
+	if (message.size() >= sizeof(disconnectedSuffix) - 1 && message.compare(message.size() - (sizeof(disconnectedSuffix) - 1), sizeof(disconnectedSuffix) - 1, disconnectedSuffix) == 0)
+		return message.substr(0, message.size() - (sizeof(disconnectedSuffix) - 1)) + " 已断开连接。";
+	auto kicked = message.find(kickedMarker);
+	if (kicked != std::string::npos)
+		return message.substr(0, kicked) + " 已被踢出：" + localizeKickReason(message.substr(kicked + sizeof(kickedMarker) - 1));
+	constexpr char joinedArcadePrefix[] = "You joined arcade ";
+	if (message.compare(0, sizeof(joinedArcadePrefix) - 1, joinedArcadePrefix) == 0)
+		return "你已进入对战机 " + message.substr(sizeof(joinedArcadePrefix) - 1);
+	constexpr char leftArcadePrefix[] = "You left arcade ";
+	if (message.compare(0, sizeof(leftArcadePrefix) - 1, leftArcadePrefix) == 0)
+		return "你已离开对战机 " + message.substr(sizeof(leftArcadePrefix) - 1);
+	constexpr char kickedPrefix[] = "Kicked: ";
+	if (message.compare(0, sizeof(kickedPrefix) - 1, kickedPrefix) == 0)
+		return "已被踢出：" + localizeKickReason(message.substr(sizeof(kickedPrefix) - 1));
+
+	std::string localized = message;
+	replaceAll(localized, "Cannot join arcade ", "无法进入对战机 ");
+	replaceAll(localized, " because the players here are using a different netplay version than you.", "：其中玩家使用的联机版本与你不同。");
+	replaceAll(localized, " because your Soku2 version mismatches.", "：双方的 Soku2 版本不一致。");
+	replaceAll(localized, "Your version: ", "你的版本：");
+	replaceAll(localized, "Their version: ", "对方版本：");
+	replaceAll(localized, "Unknown version string.", "未知版本。");
+	replaceAll(localized, " without SWR.", "，未启用 SWR。");
+	replaceAll(localized, " with SWR.", "，启用 SWR。");
+	replaceAll(localized, "Not found.", "未检测到。");
+	return localized;
+}
+
 static bool isRectVisible(int x, int y, int width, int height, int margin = 0)
 {
 	return x + width >= -margin && y + height >= -margin && x <= 640 + margin && y <= 480 + margin;
@@ -536,21 +625,21 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		this->_music = "data/bgm/" + std::string(r.music, strnlen(r.music, sizeof(r.music))) + ".ogg";
 		SokuLib::playBGM(this->_music.c_str());
 		if (!hasIpv6Map())
-			this->_addMessageToList(0xFFFF00, 0, "IPv6MapSokuMod isn't loaded, so IPv6 will not be supported.");
+			this->_addMessageToList(0xFFFF00, 0, chineseLanguage ? "未加载 IPv6MapSokuMod，因此无法使用 IPv6。" : "IPv6MapSokuMod isn't loaded, so IPv6 will not be supported.");
 		else if (isIpv6Available()) {
-			this->_addMessageToList(0xFFFF00, 0, "IPv6 connectivity is supported");
+			this->_addMessageToList(0xFFFF00, 0, chineseLanguage ? "支持 IPv6 连接。" : "IPv6 connectivity is supported.");
 #ifdef _DEBUG
 			this->_addMessageToList(DEBUG_COLOR, 0, "Your IPv6 Address is: " + getMyIpv6());
 #endif
 		} else
-			this->_addMessageToList(0xFFFF00, 0, "IPv6 not supported");
+			this->_addMessageToList(0xFFFF00, 0, chineseLanguage ? "当前环境不支持 IPv6。" : "IPv6 not supported.");
 	};
 	this->_connection->onError = [this](const std::string &msg){
 		this->_wasConnected = true;
-		this->_openMessageBox(38, msg, std::string("Internal Error"), MB_ICONERROR);
+		this->_openMessageBox(38, localizeLobbyMessage(msg), chineseLanguage ? "内部错误" : "Internal Error", MB_ICONERROR);
 	};
 	this->_connection->onImpMsg = [this](const std::string &msg){
-		this->_openMessageBox(23, msg, std::string("Notification from server"), MB_ICONINFORMATION);
+		this->_openMessageBox(23, localizeLobbyMessage(msg), chineseLanguage ? "服务器通知" : "Notification from server", MB_ICONINFORMATION);
 	};
 	this->_connection->onMsg = [this](int32_t channel, int32_t player, const std::string &msg){
 		bool privateMessage = channel == -1;
@@ -604,7 +693,7 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 		);
 		if (chatPopupMode != CHAT_POPUP_NEVER && !playerPresenceMessage)
 			playSound(49);
-		this->_addMessageToList(channel, player, msg, colorOverride, autoPopup);
+		this->_addMessageToList(channel, player, localizeLobbyMessage(msg), colorOverride, autoPopup);
 		if (opponentDisconnected) {
 			std::lock_guard<std::mutex> lock(this->_recentOpponentMutex);
 			if (this->_recentOpponent) {
@@ -621,10 +710,20 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 			Lobbies::PacketArcadeLeave leave{0};
 
 			this->_connection->send(&leave, sizeof(leave));
-			this->_addMessageToList(0xFF0000, 0, "Failed to connect: Your opponent's custom IP is invalid (" + ip + ")");
+			this->_addMessageToList(
+				0xFF0000,
+				0,
+				chineseLanguage ? "连接失败：对方配置的 IP 地址无效（" + ip + "）。" : "Failed to connect: Your opponent's custom IP is invalid (" + ip + ")"
+			);
 			return;
 		}
-		this->_addMessageToList(0x00FF00, 0, strncmp(ip.c_str(), "127.127.", 8) ? "Connect via IPv4" :  "Connect via IPv6");
+		this->_addMessageToList(
+			0x00FF00,
+			0,
+			strncmp(ip.c_str(), "127.127.", 8) ?
+				(chineseLanguage ? "通过 IPv4 连接。" : "Connect via IPv4.") :
+				(chineseLanguage ? "通过 IPv6 连接。" : "Connect via IPv6.")
+		);
 #ifdef _DEBUG
 		this->_addMessageToList(DEBUG_COLOR, 0, "Connecting to " + ip + ":" + std::to_string(port) + (spectate ? " as spectator" : " as a player"));
 #endif
@@ -875,7 +974,13 @@ int InLobbyMenu::onProcess()
 				this->_connection->send(&packet, sizeof(packet));
 				me->battleStatus = Lobbies::BATTLE_STATUS_IDLE;
 				*(*(char **)0x89a390 + 20) = false;
-				this->_addMessageToList(0xFF0000, 0, "Failed connecting to opponent: " + std::string(this->_parent->subchoice == 5 ? "They are already playing" : "Connection failed"));
+				this->_addMessageToList(
+					0xFF0000,
+					0,
+					chineseLanguage ?
+						(this->_parent->subchoice == 5 ? "连接对手失败：对方已经开始游戏。" : "连接对手失败：网络连接失败。") :
+						("Failed connecting to opponent: " + std::string(this->_parent->subchoice == 5 ? "They are already playing" : "Connection failed"))
+				);
 				this->_parent->choice = 0;
 				this->_parent->subchoice = 0;
 				messageBox->active = false;
