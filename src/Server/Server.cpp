@@ -4,10 +4,8 @@
 
 #include <iostream>
 #include <future>
-#ifndef _LOBBYNOLOG
 #include <mutex>
 extern std::mutex logMutex;
-#endif
 #include <memory>
 #include <cstring>
 #include <fstream>
@@ -377,9 +375,12 @@ void Server::_prepareConnectionHandlers(Connection &connection)
 		return true;
 	};
 	connection.onMessage = [this, &connection, id](uint8_t channel, const std::string &msg){
-		std::cout << "<" << connection.getName() << ">: " << msg << std::endl;
-		if (!msg.empty() && msg.front() == '/')
+		if (!msg.empty() && msg.front() == '/') {
+			if (msg != "/report" && msg.compare(0, strlen("/report "), "/report ") != 0)
+				std::cout << "<" << connection.getName() << ">: " << msg << std::endl;
 			return this->_processCommands(&connection, msg);
+		}
+		std::cout << "<" << connection.getName() << ">: " << msg << std::endl;
 
 		auto realMessage = "[" + connection.getName() + "]: " + msg;
 		Lobbies::PacketMessage msgPacket{channel, id, realMessage};
@@ -825,6 +826,7 @@ const std::map<std::string, Server::Cmd> Server::_commands{
 	{"list",    {"", "Displays the ids and names of all connected players.\nExample:\n/list", &Server::_listCmd}},
 	{"locate",  {"<player>", "Displays a player's current lobby coordinates. Use a player id or exact @name. Updated clients support Tab and Up/Down player completion.\nExample:\n/locate 1\n/locate @PinkySmile", &Server::_locateCmd}},
 	{"msg",     {"<player> <message>", "Sends a private message. Use a player id or exact @name. Updated clients support fuzzy name search with Tab and Up/Down completion.\nExample:\n/msg 1 Hello!\n/msg @PinkySmile Hello!", &Server::_msgCmd}},
+	{"report",  {"<player> <reason>", "Privately reports a player to the server operators. Use a player id or exact @name. Updated clients support fuzzy player completion.\nExample:\n/report @PinkySmile Repeated harassment", &Server::_reportCmd}},
 };
 
 const std::map<std::string, Server::Cmd> Server::_adminCommands{
@@ -1039,6 +1041,36 @@ void Server::_msgCmd(Connection *author, const std::vector<std::string> &args)
 		return;
 	}
 	player->send(&msgPacket1, sizeof(msgPacket1));
+}
+
+void Server::_reportCmd(Connection *author, const std::vector<std::string> &args)
+{
+	if (!author)
+		return sendSystemMessageTo(author, "Can only be used in a lobby", 0xFF0000);
+	if (args.empty())
+		return sendSystemMessageTo(author, "Missing argument #1 for command /report. Use /help report for more information", 0xFF0000);
+	if (args.size() < 2)
+		return sendSystemMessageTo(author, "Missing report reason. Use /help report for more information", 0xFF0000);
+
+	Connection *player;
+	try {
+		player = this->_findPlayer(args[0]);
+	} catch (std::exception &) {
+		return sendSystemMessageTo(author, args[0] + " is not a valid player id. Did you want to use @" + args[0] + " instead?", 0xFF0000);
+	}
+	if (!player)
+		return sendSystemMessageTo(author, "Cannot find " + args[0] + ".", 0xFF0000);
+	if (player == author)
+		return sendSystemMessageTo(author, "You cannot report yourself.", 0xFF0000);
+
+	auto reason = join(args.begin() + 1, args.end(), ' ');
+	if (reason.find_first_not_of(" \t\r\n") == std::string::npos)
+		return sendSystemMessageTo(author, "Missing report reason. Use /help report for more information", 0xFF0000);
+	{
+		std::lock_guard<std::mutex> lock(logMutex);
+		std::cout << "[REPORT] " << author->getName() << " reported " << player->getName() << ": " << reason << std::endl;
+	}
+	sendSystemMessageTo(author, "Report submitted for " + player->getName() + ".", 0x00FFFF);
 }
 
 void Server::_banCmd(Connection *author, const std::vector<std::string> &args)

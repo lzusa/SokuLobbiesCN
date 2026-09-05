@@ -3235,7 +3235,7 @@ bool InLobbyMenu::_handleLocalHelp(const std::wstring &msg)
 		this->_addMessageToList(
 			0xFFFF00,
 			0,
-			"Client command:\n/tp <player>\nPlayer completion: use Tab or Up/Down after /msg, /join, /locate, or /tp."
+			"Client command:\n/tp <player>\nPlayer completion: use Tab or Up/Down after /msg, /report, /join, /locate, or /tp."
 		);
 		return false;
 	}
@@ -3919,6 +3919,7 @@ bool InLobbyMenu::_getPlayerCompletionTarget(size_t &targetStart, size_t &target
 	};
 	static constexpr CommandPrefix prefixes[] = {
 		{L"/msg ", true},
+		{L"/report ", true},
 		{L"/join ", false},
 		{L"/locate ", false},
 		{L"/tp ", false},
@@ -3927,9 +3928,19 @@ bool InLobbyMenu::_getPlayerCompletionTarget(size_t &targetStart, size_t &target
 		targetStart = wcslen(prefix.text);
 		if (text.compare(0, targetStart, prefix.text) != 0)
 			continue;
-		targetEnd = text.find(L' ', targetStart);
-		if (targetEnd == std::wstring::npos)
-			targetEnd = text.size();
+		bool escaped = false;
+		for (targetEnd = targetStart; targetEnd < text.size(); targetEnd++) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (text[targetEnd] == L'\\') {
+				escaped = true;
+				continue;
+			}
+			if (iswspace(text[targetEnd]))
+				break;
+		}
 		appendSpace = prefix.appendSpace;
 		return this->_textCursorPosIndex >= static_cast<int>(targetStart);
 	}
@@ -4014,10 +4025,21 @@ void InLobbyMenu::_applyPrivateMessageCompletion()
 	bool appendSpace;
 	if (!this->_getPlayerCompletionTarget(targetStart, targetEnd, appendSpace))
 		return;
-	auto idText = std::to_wstring(this->_privateMessageCompletions[this->_privateMessageCompletionIndex].playerId);
+	const auto &completion = this->_privateMessageCompletions[this->_privateMessageCompletionIndex];
+	std::wstring replacement;
+	std::wstring currentText(this->_buffer.begin(), this->_buffer.end() - 1);
+	if (currentText.compare(0, wcslen(L"/report "), L"/report ") == 0) {
+		replacement = L"@";
+		for (wchar_t chr : completion.playerName) {
+			if (chr == L'\\' || iswspace(chr))
+				replacement += L'\\';
+			replacement += chr;
+		}
+	} else
+		replacement = std::to_wstring(completion.playerId);
 	this->_buffer.erase(this->_buffer.begin() + targetStart, this->_buffer.begin() + targetEnd);
-	this->_buffer.insert(this->_buffer.begin() + targetStart, idText.begin(), idText.end());
-	auto newEnd = targetStart + idText.size();
+	this->_buffer.insert(this->_buffer.begin() + targetStart, replacement.begin(), replacement.end());
+	auto newEnd = targetStart + replacement.size();
 	if (appendSpace && (newEnd >= this->_buffer.size() - 1 || this->_buffer[newEnd] != L' '))
 		this->_buffer.insert(this->_buffer.begin() + newEnd, L' ');
 	this->_updateTextCursor(static_cast<int>(newEnd + appendSpace));
