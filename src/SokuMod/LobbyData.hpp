@@ -259,7 +259,7 @@ public:
 
 	LobbyData();
 	~LobbyData();
-	std::string httpRequest(const std::string &url, const std::string &method = "GET", const std::string &data = "", long timeoutMs = 20000L, const std::atomic_bool *cancel = nullptr);
+	std::string httpRequest(const std::string &url, const std::string &method = "GET", const std::string &data = "", long timeoutMs = 20000L, const std::atomic_bool *cancel = nullptr, const std::string &bearerToken = "");
 	bool isLocked(const Emote &emote);
 	bool isLocked(const Avatar &avatar);
 	bool isLocked(const Background &background);

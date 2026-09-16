@@ -4975,8 +4975,11 @@ void InLobbyMenu::_startHosting()
 		};
 
 		free(dup);
+		const std::string payload = data.dump();
 		try {
-			lobbyData->httpRequest("https://konni.delthas.fr/games", "PUT", data.dump());
+			const bool ownHostlist = std::string(hostlistUrl) == "http://43.136.23.115:5500/games";
+			lobbyData->httpRequest(hostlistUrl, "PUT", payload, 20000L, nullptr,
+				ownHostlist ? "a4e9c701d83b4f2695ac7e1d0b38f642" : "");
 			this->_addMessageToList(0x00FF00, 0, "Broadcast to hostlist successful");
 		} catch (std::exception &e) {
 			std::string error = e.what();
@@ -4986,6 +4989,15 @@ void InLobbyMenu::_startHosting()
 				this->_addMessageToList(0xFF0000, 0, "\u521B\u5EFA\u8FDE\u63A5\u5931\u8D25\uFF1A\u8BF7\u786E\u8BA4\u4F60\u5DF2\u7ECF\u4F7F\u7528 swarm \u5EFA\u7ACB\u4E3B\u673A\uFF0C\u6709\u7591\u95EE\u53EF\u67E5\u770B wiki.514.live\u7F51\u7AD9\u8054\u673A\u6559\u7A0B\u3002");
 			else
 				this->_addMessageToList(0xFF0000, 0, "\u521B\u5EFA\u8FDE\u63A5\u5931\u8D25\uFF1A" + error);
+		}
+		// Keep the original Konni registration independent of the configured
+		// hostlist. Its availability must never make our own hostlist fail.
+		if (reportToKonni && std::string(hostlistUrl) != "https://konni.delthas.fr/games") {
+			try {
+				lobbyData->httpRequest("https://konni.delthas.fr/games", "PUT", payload, 2500L);
+			} catch (const std::exception &e) {
+				printf("Konni registration unavailable: %s\n", e.what());
+			}
 		}
 	}};
 }

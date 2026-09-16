@@ -313,6 +313,8 @@ wchar_t profilePath[MAX_PATH];
 wchar_t profileFolderPath[MAX_PATH];
 char modVersion[16] = "unknown";
 char servHost[64];
+char hostlistUrl[256];
+bool reportToKonni = true;
 char redirectIp[64];
 char *wineVersion = nullptr;
 unsigned hostPref;
@@ -1386,6 +1388,7 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE hPar
 	freopen_s(&_, "CONOUT$", "w", stderr);
 #endif
 	wchar_t servHostW[sizeof(servHost)];
+	wchar_t hostlistUrlW[sizeof(hostlistUrl)];
 	wchar_t redirectIpW[sizeof(redirectIp)];
 
 	loadSoku2Config();
@@ -1396,6 +1399,8 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE hPar
 	Blocklist::initialize(profileFolderPath);
 	PathAppendW(profilePath, L"SokuLobbies.ini");
 	GetPrivateProfileStringW(L"Lobby", L"Host", L"pinkysmile.fr", servHostW, sizeof(servHost) / sizeof(*servHost), profilePath);
+	GetPrivateProfileStringW(L"Lobby", L"HostlistUrl", L"http://43.136.23.115:5500/games", hostlistUrlW, sizeof(hostlistUrlW) / sizeof(*hostlistUrlW), profilePath);
+	reportToKonni = GetPrivateProfileIntW(L"Lobby", L"ReportToKonni", 1, profilePath) != 0;
 	GetPrivateProfileStringW(L"Lobby", L"RedirectIp", L"localhost", redirectIpW, sizeof(redirectIp) / sizeof(*redirectIp), profilePath);
 	servPort = GetPrivateProfileIntW(L"Lobby", L"Port", 5254, profilePath);
 	hostPort = GetPrivateProfileIntW(L"Lobby", L"HostPort", 10800, profilePath);
@@ -1447,6 +1452,7 @@ extern "C" __declspec(dllexport) bool Initialize(HMODULE hMyModule, HMODULE hPar
 	hostPref |= hostlist * Lobbies::HOSTPREF_ACCEPT_HOSTLIST;
 	printf("%S %i %i\n", profilePath, hostlist, hostPref);
 	wcstombs(servHost, servHostW, sizeof(servHost));
+	wcstombs(hostlistUrl, hostlistUrlW, sizeof(hostlistUrl));
 	wcstombs(redirectIp, redirectIpW, sizeof(redirectIp));
 
 	// DWORD old;

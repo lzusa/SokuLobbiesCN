@@ -1,0 +1,20 @@
+[Unit]
+Description=SokuLobbies shared spectator hostlist and UDP relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u /opt/soku-spectator-hub/spectator_hub.py --public-ip 43.136.23.115
+Restart=on-failure
+RestartSec=3
+User=nobody
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+
+

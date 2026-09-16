@@ -9,6 +9,9 @@ extern std::mutex logMutex;
 #include <memory>
 #include <cstring>
 #include <fstream>
+#include <cstdlib>
+#include <random>
+#include <nlohmann/json.hpp>
 #ifdef _WIN32
 #include <shlwapi.h>
 #endif
@@ -117,6 +120,8 @@ const char * const versionNamesFull[] = { "SokuRoll", "Vanilla", "GiuRoll", "Giu
 
 Server::Server()
 {
+	std::random_device random;
+	this->_spectatorInstance = (static_cast<uint64_t>(random()) << 32) | random();
 	std::ifstream stream{"slurs.txt"};
 	std::string line;
 
@@ -195,18 +200,26 @@ void Server::run(unsigned short port, unsigned maxPlayers, const std::string &na
 				if (!c->isConnected() && c->getActiveMachine()) {
 					this->_machinesMutex.lock();
 
-					auto &m = this->_machines[*c->getActiveMachine()];
-					auto it = std::find(m.begin(), m.end(), &*c);
+						auto arcade = *c->getActiveMachine();
+						auto &m = this->_machines[arcade];
+						auto it = std::find(m.begin(), m.end(), &*c);
 
-					if (it != m.end())
-						m.erase(it);
-					this->_machinesMutex.unlock();
+						if (it != m.end()) {
+							if (it - m.begin() < 2)
+								this->_spectatorHosts.erase(arcade);
+							m.erase(it);
+						}
+						this->_machinesMutex.unlock();
 				}
 			}
 			this->_connections.erase(std::remove_if(this->_connections.begin(), this->_connections.end(), [](std::shared_ptr<Connection> c) {
 				return !c->isConnected();
 			}), this->_connections.end());
 			this->_connectionsMutex.unlock();
+			if (std::chrono::steady_clock::now() - this->_lastSpectatorPublish >= std::chrono::seconds(3)) {
+				this->_lastSpectatorPublish = std::chrono::steady_clock::now();
+				this->_publishSpectatorSnapshot();
+			}
 			if (future.wait_for(std::chrono::milliseconds(100)) == std::future_status::ready) {
 				this->_processCommands(nullptr, future.get());
 				future = readLine();
@@ -376,7 +389,7 @@ void Server::_prepareConnectionHandlers(Connection &connection)
 	};
 	connection.onMessage = [this, &connection, id](uint8_t channel, const std::string &msg){
 		if (!msg.empty() && msg.front() == '/') {
-			if (msg != "/report" && msg.compare(0, strlen("/report "), "/report ") != 0)
+			if (msg.compare(0, strlen("/__block"), "/__block") != 0 && msg != "/report" && msg.compare(0, strlen("/report "), "/report ") != 0)
 				std::cout << "<" << connection.getName() << ">: " << msg << std::endl;
 			return this->_processCommands(&connection, msg);
 		}
@@ -422,6 +435,20 @@ void Server::_prepareConnectionHandlers(Connection &connection)
 
 		this->_machinesMutex.lock();
 		auto &machine = this->_machines[*connection.getActiveMachine()];
+		if (machine.size() >= 2 && (machine[0] == &connection || machine[1] == &connection)) {
+			auto arcade = *connection.getActiveMachine();
+			this->_spectatorHosts[arcade] = &connection;
+			this->_spectatorGenerations[arcade] = this->_nextSpectatorGeneration++;
+			auto now = std::chrono::steady_clock::now();
+			auto expiry = now + std::chrono::minutes(30);
+			std::lock_guard<std::mutex> recentLock(this->_recentOpponentsMutex);
+			this->_recentOpponents[machine[0]->getId()] = {
+				machine[1]->getName(), machine[1]->getIp().toString(), expiry
+			};
+			this->_recentOpponents[machine[1]->getId()] = {
+				machine[0]->getName(), machine[0]->getIp().toString(), expiry
+			};
+		}
 
 		for (size_t i = 0; i < machine.size(); i++)
 			if (machine[i] != &connection) {
@@ -536,6 +563,10 @@ void Server::_processCommands(Connection *author, const std::string &msg)
 
 	try {
 		auto parsed = this->_parseCommand(msg.front() == '/' ? msg.substr(1) : msg);
+		if (author && !parsed.empty() && parsed.front().compare(0, 7, "__block") == 0) {
+			this->_processBlocklistControl(*author, parsed);
+			return;
+		}
 		auto it = Server::_commands.find(parsed.front());
 
 		if (it != Server::_commands.end()) {
@@ -554,6 +585,65 @@ void Server::_processCommands(Connection *author, const std::string &msg)
 	} catch (std::exception &e) {
 		return sendSystemMessageTo(author, "执行指令时发生严重错误，请报告此错误：" + std::string(e.what()) + "\nFatal error when executing command. Please report this error: " + e.what(), 0xFF0000);
 	}
+}
+
+void Server::_processBlocklistControl(Connection &author, const std::vector<std::string> &args)
+{
+	if (args.empty())
+		return;
+	if (args[0] == "__blockcap") {
+		Lobbies::PacketMessage response{Lobbies::BLOCKLIST_CONTROL_CHANNEL, 0, "BLOCKCAP1"};
+		return author.send(&response, sizeof(response));
+	}
+	auto decodeHex = [](const std::string &value) {
+		std::string result;
+		if (value.size() % 2)
+			return result;
+		result.reserve(value.size() / 2);
+		for (size_t i = 0; i < value.size(); i += 2) {
+			auto digit = [](char c) -> int {
+				if (c >= '0' && c <= '9') return c - '0';
+				if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+				if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+				return -1;
+			};
+			auto high = digit(value[i]);
+			auto low = digit(value[i + 1]);
+			if (high < 0 || low < 0)
+				return std::string{};
+			result.push_back(static_cast<char>((high << 4) | low));
+		}
+		return result;
+	};
+	if (args[0] == "__blockreset")
+		return author.resetBlocklist();
+	if (args[0] == "__blockname" && args.size() == 2)
+		return author.addBlockedName(decodeHex(args[1]));
+	if (args[0] == "__blockipentry" && args.size() == 2)
+		return author.addBlockedIp(args[1]);
+	if (args[0] == "__blockready")
+		return author.finishBlocklistSync();
+	if (args[0] != "__blockopponentip")
+		return;
+
+	RecentOpponent opponent;
+	{
+		std::lock_guard<std::mutex> lock(this->_recentOpponentsMutex);
+		auto found = this->_recentOpponents.find(author.getId());
+		if (found == this->_recentOpponents.end() || std::chrono::steady_clock::now() >= found->second.expiresAt)
+			return;
+		opponent = found->second;
+	}
+	static constexpr char digits[] = "0123456789abcdef";
+	std::string encodedName;
+	encodedName.reserve(opponent.name.size() * 2);
+	for (auto c : opponent.name) {
+		auto byte = static_cast<unsigned char>(c);
+		encodedName.push_back(digits[byte >> 4]);
+		encodedName.push_back(digits[byte & 0xF]);
+	}
+	Lobbies::PacketMessage response{Lobbies::BLOCKLIST_CONTROL_CHANNEL, 0, "BLOCKIP1\t" + encodedName + "\t" + opponent.ip};
+	author.send(&response, sizeof(response));
 }
 
 void Server::_registerToMainServer()
@@ -601,6 +691,51 @@ void Server::close()
 	this->_opened = false;
 }
 
+void Server::_publishSpectatorSnapshot()
+{
+	try {
+		nlohmann::json snapshot = {
+			{"lobby", this->_port},
+			{"instance", this->_spectatorInstance},
+			{"games", nlohmann::json::array()}
+		};
+		{
+			std::lock_guard<std::mutex> lock(this->_machinesMutex);
+			for (const auto &[id, host] : this->_spectatorHosts) {
+				auto machine = this->_machines.find(id);
+				if (machine == this->_machines.end() || machine->second.size() < 2)
+					continue;
+				const auto &players = machine->second;
+				if (host != players[0] && host != players[1])
+					continue;
+				const auto &room = host->getRoomInfo();
+				if (room.ip.empty() || !room.port)
+					continue;
+				auto *guest = players[0] == host ? players[1] : players[0];
+				snapshot["games"].push_back({
+					{"machine", id}, {"generation", this->_spectatorGenerations.at(id)},
+					{"host", room.ip}, {"port", room.port},
+					{"host_name", host->getName()}, {"client_name", guest->getName()}
+				});
+			}
+		}
+		auto data = snapshot.dump();
+		if (data.size() > 60000)
+			return;
+		unsigned short controlPort = 18081;
+		if (const char *setting = std::getenv("SOKU_SPECTATOR_CONTROL_PORT")) {
+			char *end = nullptr;
+			auto value = std::strtoul(setting, &end, 10);
+			if (end != setting && *end == '\0' && value > 0 && value <= 65535)
+				controlPort = static_cast<unsigned short>(value);
+		}
+		sf::UdpSocket socket;
+		socket.send(data.data(), data.size(), sf::IpAddress::LocalHost, controlPort);
+	} catch (const std::exception &e) {
+		std::cerr << "Spectator snapshot failed: " << e.what() << std::endl;
+	}
+}
+
 bool Server::_onPlayerJoinArcade(Connection &connection, unsigned int aid, bool force)
 {
 	sendDebug("Server::_onPlayerJoinArcade()");
@@ -615,6 +750,28 @@ bool Server::_onPlayerJoinArcade(Connection &connection, unsigned int aid, bool 
 
 	connection.setNotPlaying();
 	auto &machine = this->_machines[aid];
+	if (machine.size() == 1) {
+		auto *host = machine[0];
+		bool hostBlocked = host->blocksOpponent(
+			connection.getName(), connection.getRealName(), connection.getIp().toString()
+		);
+		bool joiningBlocked = connection.blocksOpponent(
+			host->getName(), host->getRealName(), host->getIp().toString()
+		);
+		if (hostBlocked || joiningBlocked) {
+			std::string reason = "无法加入该对战机。\nUnable to join this arcade machine.";
+			if (connection.supportsBlocklist())
+				reason = hostBlocked
+					? "You have been blacklisted by this player."
+					: "This player is in your blacklist.";
+			Lobbies::PacketMessage blockedMessage{0xFF0000, 0, reason};
+			Lobbies::PacketArcadeLeave leave{connection.getId()};
+			connection.send(&blockedMessage, sizeof(blockedMessage));
+			connection.send(&leave, sizeof(leave));
+			this->_machinesMutex.unlock();
+			return true;
+		}
+	}
 
 	if (!machine.empty() && memcmp(machine[0]->getVersionString(), connection.getVersionString(), 16) != 0) {
 		bool foundVersion = false;
@@ -733,7 +890,11 @@ void Server::_leaveArcade(Connection &connection)
 {
 	sendDebug("Server::_leaveArcade()");
 
-	auto &machine = this->_machines[*connection.getActiveMachine()];
+	auto arcade = *connection.getActiveMachine();
+	auto &machine = this->_machines[arcade];
+	if (machine.size() >= 1 && (machine[0] == &connection ||
+		(machine.size() >= 2 && machine[1] == &connection)))
+		this->_spectatorHosts.erase(arcade);
 
 	if (connection.getBattleStatus() == Lobbies::BATTLE_STATUS_PLAYING && (
 		(!machine.empty() && machine[0] == &connection) ||

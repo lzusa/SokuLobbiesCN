@@ -8,6 +8,9 @@
 
 #include <mutex>
 #include <memory>
+#include <chrono>
+#include <cstdint>
+#include <map>
 #include <Packet.hpp>
 #include "Connection.hpp"
 
@@ -31,6 +34,18 @@ private:
 	std::vector<BanEntry> _banList;
 	std::thread _mainServerThread;
 	std::map<uint8_t, std::vector<Connection *>> _machines;
+	std::map<uint8_t, Connection *> _spectatorHosts;
+	std::map<uint8_t, uint64_t> _spectatorGenerations;
+	uint64_t _nextSpectatorGeneration = 1;
+	uint64_t _spectatorInstance = 0;
+	std::chrono::steady_clock::time_point _lastSpectatorPublish{};
+	struct RecentOpponent {
+		std::string name;
+		std::string ip;
+		std::chrono::steady_clock::time_point expiresAt;
+	};
+	std::mutex _recentOpponentsMutex;
+	std::map<uint32_t, RecentOpponent> _recentOpponents;
 	std::vector<std::string> _bannedWords;
 
 	void _processCommands(Connection *author, const std::string &msg);
@@ -38,6 +53,8 @@ private:
 	void _prepareConnectionHandlers(Connection &connection);
 	bool _startRoom(std::vector<Connection *> &machine, Connection &client);
 	void _registerToMainServer();
+	void _publishSpectatorSnapshot();
+	void _processBlocklistControl(Connection &author, const std::vector<std::string> &args);
 	std::vector<std::string> _parseCommand(const std::string &msg);
 	bool _onPlayerJoinArcade(Connection &connection, unsigned id, bool force = false);
 	void _leaveArcade(Connection &connection);

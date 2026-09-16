@@ -738,7 +738,7 @@ void SmallHostlist::_refreshHostlist()
 		if (!this->_running)
 			return;
 		auto response = lobbyData->httpRequest(
-			"https://konni.delthas.fr/games",
+			hostlistUrl,
 			"GET",
 			"",
 			20000L,

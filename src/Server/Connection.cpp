@@ -525,6 +525,50 @@ sf::IpAddress Connection::getIp() const
 	return sf::IpAddress::Any;
 }
 
+void Connection::resetBlocklist()
+{
+	std::lock_guard<std::mutex> lock(this->_blocklistMutex);
+	this->_blockedNames.clear();
+	this->_blockedIps.clear();
+	this->_blocklistReady = false;
+}
+
+void Connection::addBlockedName(const std::string &name)
+{
+	std::lock_guard<std::mutex> lock(this->_blocklistMutex);
+	if (!name.empty() && name.size() <= 128 && this->_blockedNames.size() < 512)
+		this->_blockedNames.insert(name);
+}
+
+void Connection::addBlockedIp(const std::string &ip)
+{
+	std::lock_guard<std::mutex> lock(this->_blocklistMutex);
+	if (!ip.empty() && ip.size() <= 45 && this->_blockedIps.size() < 2048)
+		this->_blockedIps.insert(ip);
+}
+
+void Connection::finishBlocklistSync()
+{
+	std::lock_guard<std::mutex> lock(this->_blocklistMutex);
+	this->_blocklistReady = true;
+}
+
+bool Connection::supportsBlocklist() const
+{
+	std::lock_guard<std::mutex> lock(this->_blocklistMutex);
+	return this->_blocklistReady;
+}
+
+bool Connection::blocksOpponent(const std::string &displayName, const std::string &realName, const std::string &ip) const
+{
+	std::lock_guard<std::mutex> lock(this->_blocklistMutex);
+	return this->_blocklistReady && (
+		this->_blockedNames.find(displayName) != this->_blockedNames.end() ||
+		this->_blockedNames.find(realName) != this->_blockedNames.end() ||
+		this->_blockedIps.find(ip) != this->_blockedIps.end()
+	);
+}
+
 Lobbies::Soku2VersionInfo Connection::getSoku2Version() const
 {
 	return this->_soku2Infos;

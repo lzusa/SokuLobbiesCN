@@ -1404,7 +1404,7 @@ void LobbyData::_grantDebugAchievements()
 		}
 }
 
-std::string LobbyData::httpRequest(const std::string &url, const std::string &method, const std::string &data, long timeoutMs, const std::atomic_bool *cancel)
+std::string LobbyData::httpRequest(const std::string &url, const std::string &method, const std::string &data, long timeoutMs, const std::atomic_bool *cancel, const std::string &bearerToken)
 {
 	std::string response;
 	int response_code;
@@ -1416,6 +1416,8 @@ std::string LobbyData::httpRequest(const std::string &url, const std::string &me
 	if (method != "GET") {
 		curl_easy_setopt(request_handle, CURLOPT_CUSTOMREQUEST, method.c_str());
 		headers = curl_slist_append(headers, "Content-Type: application/json");
+		if (!bearerToken.empty())
+			headers = curl_slist_append(headers, ("Authorization: Bearer " + bearerToken).c_str());
 		curl_easy_setopt(request_handle, CURLOPT_HTTPHEADER, headers);
 	}
 	curl_easy_setopt(request_handle, CURLOPT_WRITEFUNCTION, &LobbyData::writeMemoryCallback);

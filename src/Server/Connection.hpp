@@ -11,6 +11,8 @@
 #include <SFML/Network.hpp>
 #include <thread>
 #include <functional>
+#include <mutex>
+#include <unordered_set>
 
 class Connection {
 public:
@@ -48,6 +50,10 @@ private:
 	std::optional<uint8_t> _machineId;
 	sf::Clock _timeoutClock;
 	Room _room;
+	mutable std::mutex _blocklistMutex;
+	std::unordered_set<std::string> _blockedNames;
+	std::unordered_set<std::string> _blockedIps;
+	bool _blocklistReady = false;
 
 	void _netLoop();
 	bool _handlePacket(const Lobbies::Packet &packet, size_t &size);
@@ -103,6 +109,12 @@ public:
 	void setActiveMachine(uint8_t id);
 	std::optional<uint8_t> getActiveMachine() const;
 	const Room &getRoomInfo() const;
+	void resetBlocklist();
+	void addBlockedName(const std::string &name);
+	void addBlockedIp(const std::string &ip);
+	void finishBlocklistSync();
+	bool supportsBlocklist() const;
+	bool blocksOpponent(const std::string &displayName, const std::string &realName, const std::string &ip) const;
 	Lobbies::Soku2VersionInfo getSoku2Version() const;
 	Lobbies::LobbySettings getSettings() const;
 	Lobbies::PlayerCustomization getPlayer() const;
