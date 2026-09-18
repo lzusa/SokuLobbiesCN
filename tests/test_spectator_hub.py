@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import selectors
 import socket
 import time
 import unittest
@@ -365,6 +366,51 @@ class SpectatorHubTest(unittest.TestCase):
         game["probe_done"] = True
         now += hub_module.PROBE_SLOW_COOLDOWN
         self.assertEqual([], self.hub.probe_candidates(now))
+
+    def test_unconnectable_games_are_hidden_and_come_back(self):
+        host_port = free_udp_port()
+        self.publish(6002, 100, [dict(machine=1, generation=1, host="127.0.0.1", port=host_port,
+                                      host_name="Host", client_name="Guest")])
+        key = next(iter(self.hub.games))
+        self.assertEqual(1, len(self.hub.list_games()))
+        # failing probes do not hide the game right away ...
+        for _ in range(hub_module.HIDE_AFTER_FAILURES - 1):
+            self.hub.record_probe_result(key, None, False)
+        self.assertEqual(1, len(self.hub.list_games()))
+        # ... but once the handshake keeps failing, the entry disappears
+        self.hub.record_probe_result(key, None, False)
+        self.assertFalse(self.hub.games[key]["spectatable"])
+        self.assertEqual([], self.hub.list_games())
+        # a probe that reaches INIT_SUCCESS (no characters yet: still in the
+        # character select screen) brings it back and keeps it listed
+        self.hub.record_probe_result(key, None, True)
+        self.assertEqual(1, len(self.hub.list_games()))
+        self.assertEqual(0, self.hub.games[key]["probe_failures"])
+        self.assertFalse(self.hub.games[key]["probe_done"])
+        # characters from a probe stop the retries
+        self.hub.record_probe_result(key, ("reimu", "marisa"), True)
+        self.assertEqual(("reimu", "marisa"),
+                         (self.hub.games[key]["host_character"], self.hub.games[key]["client_character"]))
+        self.assertTrue(self.hub.games[key]["probe_done"])
+        # a real spectator session reaching INIT_SUCCESS also un-hides
+        self.hub.games[key]["spectatable"] = False
+        self.hub.games[key]["probe_failures"] = hub_module.HIDE_AFTER_FAILURES
+        viewer = ("1.2.3.4", 5555)
+        upstream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        upstream.bind(("127.0.0.1", host_port))
+        self.hub.games[key]["viewers"][viewer] = dict(
+            upstreams={socket.AF_INET: upstream}, last=time.monotonic(), actual_targets={},
+            pending_route=None, last_sent_route=self.hub.games[key]["port"],
+            handshake_started=None, spectator_ready=False, last_init=None, first_hello=None,
+            last_hello=None, root_hello_response=True, fallback_used=False, root_progress=False,
+            map_hops=0, map_switched=False)
+        self.hub.selector.register(upstream, selectors.EVENT_READ,
+                                   ("upstream", key, viewer, socket.AF_INET))
+        upstream.sendto(b"\x06accepted", upstream.getsockname())
+        self.hub.receive_upstream(key, viewer, socket.AF_INET)
+        self.assertTrue(self.hub.games[key]["spectatable"])
+        self.assertEqual(0, self.hub.games[key]["probe_failures"])
+        self.assertEqual(1, len(self.hub.list_games()))
 
     def test_ipv6_is_used_when_no_ipv4_endpoint_exists(self):
         try:

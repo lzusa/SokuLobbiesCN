@@ -46,6 +46,7 @@ QUIT = 0x0B
 PROBE_COOLDOWN = 20
 PROBE_FAST_ATTEMPTS = 3
 PROBE_SLOW_COOLDOWN = 90
+HIDE_AFTER_FAILURES = 3
 PROBE_WAIT = 3.0
 COUNTRY_RETRY_DELAY = 5
 COUNTRY_CACHE_LIMIT = 4096
@@ -567,6 +568,7 @@ class Hub:
                             host_country="", client_country="",
                             host_ip=host_ip, client_ip=client_ip,
                             probe_attempts=0, probe_last=0.0, probe_done=False,
+                            probe_failures=0,
                             routes={relay_port: root_route})
                 self.games[key] = game
                 self.selector.register(listener, selectors.EVENT_READ, ("listener", key, relay_port))
@@ -696,6 +698,14 @@ class Hub:
                 viewer["root_hello_response"] = True
             if route["port"] == game["port"] and data[0] in (6, 8):
                 viewer["root_progress"] = True
+            if data[0] == INIT_SUCCESS:
+                # A real spectator got through, so this game is connectable
+                # even if the probes have been failing.
+                game["probe_failures"] = 0
+                if not game["spectatable"]:
+                    game["spectatable"] = True
+                    print("Spectator hub: {} vs {} is connectable again".format(
+                        game["host_name"], game["client_name"]), flush=True)
             if data[0] == HOST_GAME and len(data) > 3 and data[1] == GAME_MATCH:
                 # A spectator session already carries the match setup, so the
                 # hostlist characters can be filled without any extra probe.
@@ -787,6 +797,7 @@ class Hub:
         last_send = 0.0
         frame = 0
         characters = None
+        reachable = False
         deadline = time.monotonic() + PROBE_WAIT + 4
         try:
             while characters is None and time.monotonic() < deadline:
@@ -818,6 +829,7 @@ class Hub:
                 elif data[0] == INIT_SUCCESS:
                     state = "watch"
                     last_send = 0.0
+                    reachable = True
                 elif data[0] == HOST_GAME and len(data) > 3 and data[1] == GAME_MATCH:
                     characters = parse_game_match(data)
         except OSError:
@@ -828,7 +840,36 @@ class Hub:
             except OSError:
                 pass
             sock.close()
-        return characters
+        return characters, reachable
+
+    def record_probe_result(self, key, characters, reachable):
+        """Use one probe's outcome to decide whether the game stays listed.
+
+        Reaching INIT_SUCCESS means the match can be watched (even when no
+        characters are known yet, for instance while the players are still in
+        the character select screen). Repeatedly failing means nobody can
+        connect, so the entry is hidden from the hostlist; probing continues
+        and the entry comes back as soon as a handshake succeeds.
+        """
+        with self.lock:
+            game = self.games.get(key)
+            if not game:
+                return
+            if reachable:
+                game["probe_failures"] = 0
+                if not game["spectatable"]:
+                    game["spectatable"] = True
+                    print("Spectator hub: {} vs {} is connectable again".format(
+                        game["host_name"], game["client_name"]), flush=True)
+                if characters:
+                    game["host_character"], game["client_character"] = characters
+                    game["probe_done"] = True
+                return
+            game["probe_failures"] = game.get("probe_failures", 0) + 1
+            if game["spectatable"] and game["probe_failures"] >= HIDE_AFTER_FAILURES:
+                game["spectatable"] = False
+                print("Spectator hub: hiding unconnectable game {} vs {} (port {})".format(
+                    game["host_name"], game["client_name"], game["port"]), flush=True)
 
     def probe_candidates(self, now):
         """Games that still need a character probe, and when to try again.
@@ -858,13 +899,8 @@ class Hub:
         while True:
             time.sleep(1.0)
             for key, relay_port in self.probe_candidates(time.monotonic()):
-                characters = self.probe_characters(relay_port)
-                if characters:
-                    with self.lock:
-                        game = self.games.get(key)
-                        if game:
-                            game["host_character"], game["client_character"] = characters
-                            game["probe_done"] = True
+                characters, reachable = self.probe_characters(relay_port)
+                self.record_probe_result(key, characters, reachable)
                 time.sleep(0.2)
 
     def list_games(self):
