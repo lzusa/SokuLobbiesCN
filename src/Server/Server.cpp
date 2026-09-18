@@ -715,6 +715,8 @@ void Server::_publishSpectatorSnapshot()
 				snapshot["games"].push_back({
 					{"machine", id}, {"generation", this->_spectatorGenerations.at(id)},
 					{"host", room.ip}, {"port", room.port},
+					{"host_ip", host->getIp().toString()},
+					{"client_ip", guest->getIp().toString()},
 					{"host_name", host->getName()}, {"client_name", guest->getName()}
 				});
 			}
