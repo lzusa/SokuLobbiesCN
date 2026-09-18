@@ -343,6 +343,29 @@ class SpectatorHubTest(unittest.TestCase):
         self.hub.games[key]["host_country"] = self.hub.player_countries["A"]
         self.assertEqual("jp", self.hub.games[key]["host_country"])
 
+    def test_character_probe_keeps_retrying_slowly(self):
+        self.publish(6002, 100, [dict(machine=1, generation=1, host="8.8.8.8", port=10800,
+                                      host_name="A", client_name="B")])
+        key = next(iter(self.hub.games))
+        now = 1000.0
+        # three quick attempts, one cooldown apart
+        for _ in range(hub_module.PROBE_FAST_ATTEMPTS):
+            now += hub_module.PROBE_COOLDOWN
+            self.assertEqual([(key, self.hub.games[key]["port"])], self.hub.probe_candidates(now))
+        # after those, the same cooldown is no longer enough ...
+        now += hub_module.PROBE_COOLDOWN
+        self.assertEqual([], self.hub.probe_candidates(now))
+        # ... but the slow cooldown keeps retrying, and it never gives up
+        for _ in range(20):
+            now += hub_module.PROBE_SLOW_COOLDOWN
+            self.assertEqual(1, len(self.hub.probe_candidates(now)))
+        # once the characters are known the retries stop
+        game = self.hub.games[key]
+        game["host_character"], game["client_character"] = "reimu", "marisa"
+        game["probe_done"] = True
+        now += hub_module.PROBE_SLOW_COOLDOWN
+        self.assertEqual([], self.hub.probe_candidates(now))
+
     def test_ipv6_is_used_when_no_ipv4_endpoint_exists(self):
         try:
             root = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)

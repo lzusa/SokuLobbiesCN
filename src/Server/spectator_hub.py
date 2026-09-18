@@ -44,7 +44,8 @@ REDIRECT = 0x08
 INIT_SUCCESS = 0x06
 QUIT = 0x0B
 PROBE_COOLDOWN = 20
-PROBE_ATTEMPTS = 3
+PROBE_FAST_ATTEMPTS = 3
+PROBE_SLOW_COOLDOWN = 90
 PROBE_WAIT = 3.0
 COUNTRY_RETRY_DELAY = 5
 COUNTRY_CACHE_LIMIT = 4096
@@ -565,7 +566,7 @@ class Hub:
                             spectatable=True, host_character="", client_character="",
                             host_country="", client_country="",
                             host_ip=host_ip, client_ip=client_ip,
-                            probe_attempts=0, probe_last=0.0,
+                            probe_attempts=0, probe_last=0.0, probe_done=False,
                             routes={relay_port: root_route})
                 self.games[key] = game
                 self.selector.register(listener, selectors.EVENT_READ, ("listener", key, relay_port))
@@ -701,7 +702,7 @@ class Hub:
                 characters = parse_game_match(data)
                 if characters:
                     game["host_character"], game["client_character"] = characters
-                    game["probe_attempts"] = PROBE_ATTEMPTS
+                    game["probe_done"] = True
             if data[0] == 8 and len(data) == 69:
                 target = parse_sockaddr(data[5:21])
                 if target:
@@ -829,30 +830,41 @@ class Hub:
             sock.close()
         return characters
 
+    def probe_candidates(self, now):
+        """Games that still need a character probe, and when to try again.
+
+        Hosts only publish HOST_GAME/GAME_MATCH once the match itself starts,
+        so a game that appears while the players are still in the character
+        select screen cannot be read yet: retry quickly at first and then keep
+        retrying slowly until the match reports its setup.
+        """
+        candidates = []
+        with self.lock:
+            for key, game in self.games.items():
+                if game.get("host_character") and game.get("client_character"):
+                    continue
+                if game.get("probe_done"):
+                    continue
+                attempts = game.get("probe_attempts", 0)
+                cooldown = PROBE_COOLDOWN if attempts < PROBE_FAST_ATTEMPTS else PROBE_SLOW_COOLDOWN
+                if now - game.get("probe_last", 0.0) < cooldown:
+                    continue
+                game["probe_attempts"] = attempts + 1
+                game["probe_last"] = now
+                candidates.append((key, game["port"]))
+        return candidates
+
     def probe_loop(self):
         while True:
             time.sleep(1.0)
-            now = time.monotonic()
-            candidates = []
-            with self.lock:
-                for key, game in self.games.items():
-                    if game.get("host_character") and game.get("client_character"):
-                        continue
-                    if game.get("probe_attempts", 0) >= PROBE_ATTEMPTS:
-                        continue
-                    if now - game.get("probe_last", 0.0) < PROBE_COOLDOWN:
-                        continue
-                    game["probe_attempts"] = game.get("probe_attempts", 0) + 1
-                    game["probe_last"] = now
-                    candidates.append((key, game["port"]))
-            for key, relay_port in candidates:
+            for key, relay_port in self.probe_candidates(time.monotonic()):
                 characters = self.probe_characters(relay_port)
                 if characters:
                     with self.lock:
                         game = self.games.get(key)
                         if game:
                             game["host_character"], game["client_character"] = characters
-                            game["probe_attempts"] = PROBE_ATTEMPTS
+                            game["probe_done"] = True
                 time.sleep(0.2)
 
     def list_games(self):
