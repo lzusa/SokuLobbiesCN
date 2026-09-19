@@ -2018,11 +2018,23 @@ void InLobbyMenu::_unhook()
 
 void InLobbyMenu::_addMessageToList(unsigned int channel, unsigned player, const std::string &msg, std::optional<unsigned> colorOverride, bool autoPopup)
 {
-	// Error messages must remain visible regardless of the F3 popup mode.
+	const auto isBattleOrCharacterSelect = [](unsigned scene) {
+		return scene == SokuLib::SCENE_BATTLECL ||
+			scene == SokuLib::SCENE_BATTLESV ||
+			scene == SokuLib::SCENE_SELECTCL ||
+			scene == SokuLib::SCENE_SELECTSV;
+	};
+	const bool suppressPopup = isBattleOrCharacterSelect(SokuLib::sceneId) ||
+		isBattleOrCharacterSelect(SokuLib::newSceneId);
+
+	// Red messages override the F3 preference outside a match, but must not
+	// interrupt battle or character-selection input by opening the chat there.
 	if (channel == 0xFF0000) {
-		this->_errorChatPopup.store(true, std::memory_order_relaxed);
-		this->_chatTimer = 900;
-	} else if (autoPopup)
+		if (!suppressPopup) {
+			this->_errorChatPopup.store(true, std::memory_order_relaxed);
+			this->_chatTimer = 900;
+		}
+	} else if (autoPopup && !suppressPopup)
 		this->_chatTimer = 900;
 	std::lock_guard<std::mutex> lock(this->_chatMessagesMutex);
 	this->_chatMessages.emplace_front();
