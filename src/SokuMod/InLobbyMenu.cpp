@@ -763,8 +763,14 @@ InLobbyMenu::InLobbyMenu(LobbyMenu *menu, SokuLib::MenuConnect *parent, std::sha
 			SokuLib::sceneId == SokuLib::SCENE_BATTLESV ||
 			SokuLib::newSceneId == SokuLib::SCENE_BATTLECL ||
 			SokuLib::newSceneId == SokuLib::SCENE_BATTLESV;
-		if (inBattle && opponentMessage && chatPopupMode != CHAT_POPUP_NEVER)
+		if (inBattle && opponentMessage && chatPopupMode != CHAT_POPUP_NEVER) {
 			this->_battleOpponentChatPopup.store(true, std::memory_order_relaxed);
+			// _addMessageToList deliberately suppresses generic automatic
+			// popups during battle. Opponent messages are the one explicit
+			// exception: without starting the timer here the flag is cleared
+			// again on the next update and the message never becomes visible.
+			this->_chatTimer = 900;
+		}
 		auto endsWith = [&msg](const char *suffix) {
 			auto length = strlen(suffix);
 
