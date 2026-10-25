@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.15)
 project(SokuLobbies)
 
+# Preserve exception unwinding even when a build preset replaces CXX flags.
+if(MSVC)
+	add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/EHsc>)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/pkgs)
 

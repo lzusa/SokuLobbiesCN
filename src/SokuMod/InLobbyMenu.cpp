@@ -2351,7 +2351,7 @@ void InLobbyMenu::_renderRelativeRatings()
 		return;
 	auto portraitFor = [&](const std::string &code) -> SokuLib::DrawUtils::Sprite * {
 		// Use the same character emote icons as the spectator list.
-		const auto found = lobbyData->emotesByName.find(code + "1");
+		const auto found = lobbyData->emotesByName.find(code);
 		return found == lobbyData->emotesByName.end() ? nullptr : &found->second->sprite;
 	};
 	auto makeLines = [&](const Player &player, bool own) {

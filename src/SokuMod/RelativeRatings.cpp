@@ -1,4 +1,5 @@
 #include "RelativeRatings.hpp"
+#include "RatingsJson.hpp"
 #include "RatingsNetworkDiagnostics.hpp"
 #include "ClientTransport.hpp"
 #include "HttpResponseBuffer.hpp"
@@ -304,7 +305,7 @@ void RelativeRatings::_loadMappings()
 bool RelativeRatings::_publish(const std::string &text)
 {
 	try {
-		Json root = Json::parse(text);
+		Json root = parseRatingsJson(text);
 		if (!root.is_object() || !root.contains("players") || !root["players"].is_array())
 			return false;
 		std::unordered_map<std::string, Rating> playedAs;
@@ -553,7 +554,7 @@ void RelativeRatings::_downloadProfiles(const std::vector<std::string> &profiles
 	std::size_t responseRecords = 0;
 	bool validResponse = false;
 	try {
-		auto root = Json::parse(body);
+		auto root = parseRatingsJson(body);
 		if (root.contains("players") && root["players"].is_array()) {
 			validResponse = true;
 			responseRecords = root["players"].size();
@@ -591,11 +592,12 @@ void RelativeRatings::_downloadProfiles(const std::vector<std::string> &profiles
 			if (!fetch("https://soku.cleista.cc/api/names/profiles?name=" + std::string(encoded), nullptr, mapping, "names/profiles GET")) {
 				++aliasFailures;
 				aliasErrors[name] = lastFailure;
+				continue;
 			}
 		}
-		else aliasErrors[name] = {RatingRequests::State::Internal};
+		else { aliasErrors[name] = {RatingRequests::State::Internal}; continue; }
 		try {
-			auto root = Json::parse(mapping);
+			auto root = parseRatingsJson(mapping);
 			if (!root.is_object()) throw std::runtime_error("Invalid alias response");
 			auto item = root.find(name);
 			if (item != root.end() && item->is_object()) {
@@ -617,7 +619,7 @@ void RelativeRatings::_downloadProfiles(const std::vector<std::string> &profiles
 			const bool handlePublished = _publish(handleBody);
 			if (!handlePublished) {
 				try {
-					const auto parsed = Json::parse(handleBody);
+					const auto parsed = parseRatingsJson(handleBody);
 					if (!parsed.contains("players") || !parsed["players"].is_array() || !parsed["players"].empty())
 						throw std::runtime_error("Invalid handle response");
 				} catch (...) {
@@ -626,7 +628,7 @@ void RelativeRatings::_downloadProfiles(const std::vector<std::string> &profiles
 			}
 			_debugLog("handle batch response: " + lastFetchInfo + " published=" + (handlePublished ? "true" : "false"));
 			try {
-				auto root = Json::parse(handleBody);
+				auto root = parseRatingsJson(handleBody);
 				if (root.contains("players") && root["players"].is_array()) {
 					std::lock_guard<std::mutex> lock(_mutex);
 					for (const auto &entry : root["players"]) {
@@ -656,7 +658,7 @@ void RelativeRatings::_downloadProfiles(const std::vector<std::string> &profiles
 		" aliases=" + std::to_string(aliases.size()) + " rating_data_loaded=" + (hasData() ? "true" : "false"));
 	// Persist each response row separately so future visits only read the names requested.
 	try {
-		auto root = Json::parse(body);
+		auto root = parseRatingsJson(body);
 		if (root.contains("players") && root["players"].is_array())
 			for (const auto &entry : root["players"]) {
 				auto query = optionalString(entry, "query");

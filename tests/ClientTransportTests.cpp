@@ -2,6 +2,7 @@
 #include "ClientChatLog.hpp"
 #include "IdleTracking.hpp"
 #include "RatingRequestStatus.hpp"
+#include "RatingsJson.hpp"
 #include "NearbyRatingCards.hpp"
 #include "Socket.hpp"
 #include "HttpResponseBuffer.hpp"
@@ -373,6 +374,12 @@ static void chatLogFile() {
 
 int main() {
 	try {
+		for (const auto &body : {"", "<html>error</html>", "{\"players\":", "[]", "null"}) {
+			bool caught = false;
+			try { parseRatingsJson(body); } catch (const std::exception &) { caught = true; }
+			require(caught, "malformed rating response did not unwind safely");
+		}
+		require(parseRatingsJson("{\"players\":[]}")["players"].is_array(), "valid rating response rejected");
 		require(clientPacketSize(Lobbies::OPCODE_OLLEH) == sizeof(Lobbies::PacketOlleh) &&
 			clientPacketSize(Lobbies::OPCODE_MESSAGE) == sizeof(Lobbies::PacketMessage) && clientPacketSize(255) == 0,
 			"legacy frame sizes changed");

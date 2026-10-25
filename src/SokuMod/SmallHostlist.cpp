@@ -686,18 +686,18 @@ void SmallHostlist::render()
 			flag2->second->draw();
 
 			if (!entry.p1chr.empty() && !entry.p2chr.empty()) {
-				auto chr1 = lobbyData->emotesByName.find(entry.p1chr + "1");
-				auto chr2 = lobbyData->emotesByName.find(entry.p2chr + "1");
+				auto chr1 = lobbyData->emotesByName.find(entry.p1chr);
+				auto chr2 = lobbyData->emotesByName.find(entry.p2chr);
 				LobbyData::Emote *p1;
 				LobbyData::Emote *p2;
 
 				if (chr1 == lobbyData->emotesByName.end()) {
-					printf("Unknown emote %s1", entry.p1chr.c_str());
+					printf("Unknown character portrait %s", entry.p1chr.c_str());
 					p1 = &lobbyData->emotes[0];
 				} else
 					p1 = chr1->second;
 				if (chr2 == lobbyData->emotesByName.end()) {
-					printf("Unknown emote %s1", entry.p2chr.c_str());
+					printf("Unknown character portrait %s", entry.p2chr.c_str());
 					p2 = &lobbyData->emotes[0];
 				} else
 					p2 = chr2->second;
